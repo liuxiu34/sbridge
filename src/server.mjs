@@ -402,6 +402,13 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     return json(res, 200, { ok: termmod.killTerm(body.id) });
   }
+  // 一键关闭：body.tool 为空 = 关闭全部工具；指定 tool = 只关该工具的所有终端
+  if (req.method === 'POST' && resource === 'terms' && id === 'kill-all') {
+    const body = await readBody(req);
+    const tool = body.tool ? String(body.tool) : null;
+    if (tool && !TOOLS[tool]) return json(res, 400, { error: '未知工具' });
+    return json(res, 200, { ok: true, killed: termmod.killAll(tool) });
+  }
 
 /* ---------- 会话流/历史：展示层解析与截断（capture/检查点链路保持全文保真，截断只用于展示传输） ---------- */
 const STREAM_TAIL = 300;

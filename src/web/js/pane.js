@@ -59,7 +59,6 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
           <button type="button" class="pbtn" data-pact="export" title="导出该会话为 Markdown（只读）">${icon('download')}</button>
           <button type="button" class="pbtn danger" data-pact="cancelheadless" title="取消正在执行的无头任务" hidden>${icon('stop')} 取消执行</button>
           <button type="button" class="pbtn danger" data-pact="stopterm" title="停止该会话的终端进程（相当于在终端里输入退出命令）" hidden>${icon('stop')} 停止</button>
-          <button type="button" class="pbtn danger" data-pact="remove" title="从任务移除该会话（只移除看板记录，不删除本地会话文件）">${icon('trash')}</button>
           <button type="button" class="pbtn danger" data-pact="close" title="关闭标签" aria-label="关闭标签">${icon('x', 13)}</button>
         </span>
       </div>
@@ -608,7 +607,6 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   host.querySelector('[data-pact="ctx"]')?.addEventListener('click', () => openCtxModal(node));
   host.querySelector('[data-pact="handoff"]')?.addEventListener('click', () => openHandoffModal(node));
   host.querySelector('[data-pact="export"]')?.addEventListener('click', () => exportNodeMarkdown(node));
-  host.querySelector('[data-pact="remove"]')?.addEventListener('click', () => removeTaskNodes([node.id]));
   cancelHeadlessBtn?.addEventListener('click', () => cancelHeadless());
   // ⏹ 停止：杀掉该会话挂着的 PTY（等效在终端输入退出命令）；确认一次防误触
   const stopBtn = host.querySelector('[data-pact="stopterm"]');

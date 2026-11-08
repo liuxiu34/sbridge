@@ -43,6 +43,7 @@ $('btn-discover').onclick = async () => {
 };
 $('btn-launch').onclick = () => { if (currentTask) launchFlow(); };
 $('btn-attach').onclick = () => attachFlow();
+$('btn-term-close').onclick = () => openTermCloseModal();
 // 会话标签：激活 / 关闭
 $('sess-tabs').addEventListener('click', (e) => {
   const closeBtn = e.target.closest('[data-close]');

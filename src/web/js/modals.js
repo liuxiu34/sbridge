@@ -476,3 +476,66 @@ function openEnvCheckModal() {
   return close;
 }
 
+/** 一键关闭终端：全部关闭，或只关某一个工具（Codex / Pi / Claude Code）的所有终端 */
+function openTermCloseModal() {
+  let runningByTool = {};
+  const close = openModal({
+    title: '关闭终端',
+    bodyHtml: `
+      <div class="term-close-head">
+        <span id="term-close-sum">正在读取终端状态…</span>
+        <button type="button" class="btn-primary" id="term-kill-all" disabled>全部关闭</button>
+      </div>
+      <div id="term-close-list"></div>`,
+    submitLabel: '',
+  });
+
+  const render = async () => {
+    let terms = [];
+    try { terms = (await api('/api/terms')).terms || []; } catch (err) {
+      const list = $('term-close-list');
+      if (list) list.innerHTML = `<div class="empty-tree">读取终端失败：${escapeHtml(err.message)}</div>`;
+      return;
+    }
+    const tools = state.tools?.length ? state.tools : DEFAULT_TOOLS;
+    const running = terms.filter((t) => t.running);
+    runningByTool = {};
+    for (const t of running) runningByTool[t.tool] = (runningByTool[t.tool] || 0) + 1;
+    const total = running.length;
+    if ($('term-close-sum')) $('term-close-sum').textContent = total ? `当前有 ${total} 个终端在运行` : '当前没有运行中的终端';
+    if ($('term-kill-all')) $('term-kill-all').disabled = !total;
+    const list = $('term-close-list');
+    if (!list) return;
+    list.innerHTML = tools.map((t) => {
+      const n = runningByTool[t.id] || 0;
+      return `<div class="set-row">
+        <span class="set-text">
+          <span class="pick-title"><span class="chip ${t.id}">${escapeHtml(t.label)}</span></span>
+          <span class="pick-sub">${n ? `${n} 个终端运行中` : '没有运行中的终端'}</span>
+        </span>
+        <button type="button" class="btn-ghost" data-kill-tool="${t.id}" ${n ? '' : 'disabled'}>关闭</button>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('[data-kill-tool]').forEach((btn) => {
+      btn.onclick = () => killAllTerms(btn.dataset.killTool);
+    });
+  };
+
+  const killAllTerms = async (tool) => {
+    const n = tool ? (runningByTool[tool] || 0) : Object.values(runningByTool).reduce((a, b) => a + b, 0);
+    if (!n) { toast('没有运行中的终端'); return; }
+    const label = tool ? `${toolLabel(tool)} 的` : '全部工具的';
+    if (!confirm(`关闭${label} ${n} 个终端？正在运行的 agent 会被终止；会话文件保留，可重新启动终端恢复。`)) return;
+    try {
+      const r = await api('/api/terms/kill-all', { method: 'POST', body: tool ? { tool } : {} });
+      toast(`已关闭 ${r.killed} 个终端`);
+      try { refreshTermIndicators(); } catch { /* ignore */ }
+      await render();
+    } catch (err) { toast(err.message); }
+  };
+
+  $('term-kill-all').onclick = () => killAllTerms(null);
+  render();
+  return close;
+}
+
