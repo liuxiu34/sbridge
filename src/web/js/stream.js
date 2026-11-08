@@ -254,6 +254,27 @@ function createCotTimeline(listEl, options) {
   /* 消息下方「复制」：按索引取 step.text 原文（复制 Markdown 原文，不是渲染后的 HTML）。
      listEl 不会重建，事件委托挂一次即可。 */
   listEl.addEventListener('click', async (e) => {
+    const branchBtn = e.target.closest('[data-branch]');
+    if (branchBtn) {
+      if (branchBtn.disabled) return;
+      branchBtn.disabled = true;
+      try {
+        toast('正在创建分支…（会用当前工具复制这个会话）');
+        const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/fork`, { method: 'POST' });
+        if (r.node) {
+          await refreshTask();
+          openSessionTab(r.node.id);
+          toast('分支已创建，已在新标签打开（原会话不变）');
+        } else {
+          toast(r.warning || '分支终端已启动，但还没检测到新会话文件');
+        }
+      } catch (err) {
+        toast(`分支失败: ${err.message}`);
+      } finally {
+        branchBtn.disabled = false;
+      }
+      return;
+    }
     const btn = e.target.closest('[data-copy]');
     if (!btn) return;
     const idx = Number(btn.dataset.copy);
@@ -508,12 +529,14 @@ function createCotTimeline(listEl, options) {
         const isUser = step.kind === 'user';
         const idx = steps.indexOf(step);
         const canCopy = copyTexts.has(idx);
-        // 靠左右对齐区分说话人，不需要头像图标；整段回答的末尾才放一个复制组件
+        const canBranch = canCopy && !isUser && node.tool !== 'claude'; // Claude 的 fork 需先有输入才落盘，暂不提供一键分支
+        // 靠左右对齐区分说话人，不需要头像图标；整段回答的末尾才放复制/分支组件
         return `<div class="chat-msg ${isUser ? 'is-user' : 'is-assistant'}">
           <div class="chat-msg-body">
             <div class="chat-bubble">${step.bodyHtml || `<div class="sev-text">${renderMessageHtml(step.text || '', isUser ? 3000 : 6000)}</div>`}</div>
             ${canCopy ? `<div class="chat-actions">
               <button type="button" class="chat-copy" data-copy="${idx}" title="复制整段内容">${icon('copy', 12)}</button>
+              ${canBranch ? `<button type="button" class="chat-copy chat-branch" data-branch="${idx}" title="创建分支：复制当前会话（保留完整历史），原会话不变">${icon('git', 12)}</button>` : ''}
             </div>` : ''}
           </div>
         </div>`;

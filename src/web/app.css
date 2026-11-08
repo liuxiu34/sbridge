@@ -688,7 +688,9 @@ html, body {
   transition: opacity .15s ease, background .15s ease, color .15s ease, border-color .15s ease;
 }
 .chat-copy:hover { opacity: 1; background: var(--hover-soft); color: var(--text); }
+.chat-copy:disabled { opacity: .3; cursor: default; }
 .chat-copy.copied { opacity: 1; color: var(--codex); background: var(--codex-soft); border-color: var(--codex-soft); }
+.chat-branch { margin-left: 2px; }
 .chat-bubble { min-width: 0; max-width: min(900px, 90%); font-size: 15px; line-height: 1.7; }
 .chat-msg.is-user .chat-bubble { max-width: 100%; }
 .chat-msg.is-user .chat-bubble {
