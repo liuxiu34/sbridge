@@ -26,20 +26,26 @@ function saveUserSettings(next) {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(userSettings)); } catch { /* 隐私模式等 */ }
 }
 function openSettingsModal() {
-  openModal({
+  const close = openModal({
     title: '设置',
     bodyHtml: `
       <label class="set-row">
         <span class="set-text"><span class="pick-title">打开会话时自动启动终端</span>
         <span class="pick-sub">焦点面板的会话直接拉起终端进程，不用再点「启动此会话的终端」；关闭后回到手动模式</span></span>
         <span class="switch"><input type="checkbox" id="set-autoterm" ${userSettings.autoStartTerm ? 'checked' : ''}/><i></i></span>
-      </label>`,
+      </label>
+      <div class="set-row">
+        <span class="set-text"><span class="pick-title">环境诊断</span>
+        <span class="pick-sub">检查 Codex / Pi / Claude Code 是否安装、会话目录与登录/密钥配置；只读检测，不改任何配置</span></span>
+        <button type="button" class="btn-ghost" id="set-envcheck">${icon('radar')} 检查</button>
+      </div>`,
     submitLabel: '保存',
     onSubmit: () => {
       saveUserSettings({ autoStartTerm: $('set-autoterm').checked });
       toast('设置已保存');
     },
   });
+  $('set-envcheck').onclick = () => { close(); openEnvCheckModal(); };
 }
 
 /* ---------- 赞助入口：填好链接后侧栏才会出现「♥ 支持」 ---------- */
@@ -185,6 +191,9 @@ const ICONS = {
   heart: '<path d="M19.5 12.6 12 20l-7.5-7.4a5 5 0 0 1 7.5-6.6 5 5 0 0 1 7.5 6.6z"/>', // 支持/赞助
   git: '<circle cx="6" cy="18" r="2.5"/><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 8.5v7"/><path d="M18 8.5v2a4 4 0 0 1-4 4H6"/>', // 项目/仓库
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>', // 复制
+  search: '<circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/>',             // 全局搜索
+  download: '<path d="M12 3v12"/><path d="M7 10.5 12 15.5l5-5"/><path d="M4 20h16"/>', // 导出
+  refresh: '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/>',              // 刷新/重新检查
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
 };
 /** 生成内联 SVG 图标（currentColor 随按钮着色） */

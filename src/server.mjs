@@ -1,7 +1,8 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
+import os from 'node:os';
 import { getAsset } from 'node:sea';
 import * as store from './store.mjs';
 import * as codex from './codex.mjs';
@@ -28,6 +29,101 @@ const TOOL_LABELS = { codex: 'Codex', pi: 'Pi', claude: 'Claude Code' };
 const LAUNCH_COMMANDS = { codex: 'codex', pi: 'pi', claude: 'claude' };
 // 目录比较用：大小写、斜杠、尾斜杠不敏感
 const normDir = (p) => String(p || '').replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
+
+/** 杀掉整棵进程树：Windows 下 PTY/无头命令都是 cmd 包裹，只 kill 壳会留下孤儿进程 */
+function killProcessTree(pid) {
+  if (!pid) return;
+  try { execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' }); } catch { /* 已退出 */ }
+}
+
+/** 搜索命中片段：压缩空白后取命中位置前后各 radius 个字符 */
+function searchSnippet(text, q, radius = 44) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  const pos = clean.toLowerCase().indexOf(String(q || '').toLowerCase());
+  if (pos < 0) return clean.slice(0, radius * 2);
+  const start = Math.max(0, pos - radius);
+  const end = Math.min(clean.length, pos + String(q).length + radius);
+  return `${start > 0 ? '…' : ''}${clean.slice(start, end)}${end < clean.length ? '…' : ''}`;
+}
+
+/** 会话导出为 Markdown（保留消息与工具调用，输出给用户自己归档） */
+function renderSessionMarkdown(node, evts) {
+  const lines = [`# ${node.title || '(会话)'}`, ''];
+  lines.push(`- 工具：${TOOL_LABELS[node.tool] || node.tool}`);
+  if (node.cwd) lines.push(`- 目录：${node.cwd}`);
+  if (node.sessionId) lines.push(`- 会话 ID：${node.sessionId}`);
+  if (node.createdAt) lines.push(`- 创建时间：${node.createdAt}`);
+  lines.push(`- 导出时间：${new Date().toISOString()}（sbridge）`, '');
+  for (const e of evts) {
+    if (e.kind === 'user') lines.push('## 用户', '', String(e.text || '').trim(), '');
+    else if (e.kind === 'assistant') lines.push('## AI', '', String(e.text || '').trim(), '');
+    else if (e.kind === 'tool_call') {
+      const args = typeof e.args === 'string' ? e.args : JSON.stringify(e.args || '');
+      lines.push(`> 工具调用：${e.toolName || 'tool'}`, '', '```', truncate(args, 2000), '```', '');
+    } else if (e.kind === 'tool_result') {
+      lines.push(`> 工具结果${e.isError ? '（错误）' : ''}`, '', '```', truncate(String(e.outcome || ''), 2000), '```', '');
+    }
+  }
+  return lines.join('\n');
+}
+/** 探测 CLI 是否可用并取版本输出（带超时，失败不抛错） */
+function probeCommand(cmd, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let out = '';
+    let err = '';
+    let child;
+    try { child = spawn(cmd, { shell: true, windowsHide: true }); }
+    catch (e) { resolve({ ok: false, error: e.message }); return; }
+    const timer = setTimeout(() => {
+      killProcessTree(child.pid);
+      resolve({ ok: false, timeout: true, output: (out + err).trim() });
+    }, timeoutMs);
+    timer.unref?.();
+    child.stdout?.on('data', (d) => { out = (out + d).slice(-400); });
+    child.stderr?.on('data', (d) => { err = (err + d).slice(-400); });
+    child.on('exit', (code) => { clearTimeout(timer); resolve({ ok: code === 0, code, output: (out + err).trim() }); });
+    child.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, error: e.message }); });
+  });
+}
+
+/** 判断各工具是否已有登录/密钥配置（只看配置存在性，不联网验证账号） */
+function readAuthHint(tool) {
+  const home = os.homedir();
+  try {
+    if (tool === 'codex') {
+      const f = path.join(home, '.codex', 'auth.json');
+      const st = fs.statSync(f);
+      if (st.size > 2) return { ok: true, detail: '~/.codex/auth.json 存在（已登录 ChatGPT 或已配密钥）' };
+    }
+    if (tool === 'pi') {
+      const f = path.join(home, '.pi', 'agent', 'models.json');
+      const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+      const providers = Object.entries(j.providers || {});
+      const withKey = providers.filter(([, v]) => v && (v.apiKey || v.api_key));
+      if (withKey.length) {
+        let def = '';
+        try {
+          const s = JSON.parse(fs.readFileSync(path.join(home, '.pi', 'agent', 'settings.json'), 'utf8'));
+          def = [s.defaultProvider, s.defaultModel].filter(Boolean).join('/');
+        } catch { /* ignore */ }
+        return { ok: true, detail: `${withKey.length} 个 provider 配了密钥${def ? `，默认 ${def}` : ''}` };
+      }
+    }
+    if (tool === 'claude') {
+      const sf = path.join(home, '.claude', 'settings.json');
+      if (fs.existsSync(sf)) {
+        const env = JSON.parse(fs.readFileSync(sf, 'utf8')).env || {};
+        if (env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY || env.ANTHROPIC_BASE_URL) {
+          return { ok: true, detail: 'settings.json 已配置网关或密钥' };
+        }
+      }
+      const cf = path.join(home, '.claude.json');
+      if (fs.existsSync(cf) && fs.statSync(cf).size > 2) return { ok: true, detail: '.claude.json 存在（可能已登录）' };
+    }
+  } catch (e) { return { ok: false, detail: e.message }; }
+  return { ok: false, detail: '未找到登录或密钥配置' };
+}
+
 // 从会话 id 构造 resume 命令（「接入已有会话」的节点只有会话文件没有 resumeCommand 时用）
 const RESUME_COMMANDS = {
   pi: (id) => `pi --session ${id}`,
@@ -200,6 +296,104 @@ async function handleApi(req, res, url) {
     return json(res, 200, { tools: Object.keys(TOOLS).map((id) => ({ id, label: TOOL_LABELS[id] || id })) });
   }
 
+  /* 环境诊断：CLI 是否安装、会话目录是否存在、登录/密钥是否已配置（不联网验证账号） */
+  if (req.method === 'GET' && resource === 'env-check') {
+    const probes = { codex: 'codex --version', pi: 'pi --version', claude: 'claude --version' };
+    const results = [];
+    for (const toolId of Object.keys(TOOLS)) {
+      const tool = TOOLS[toolId];
+      let root = null;
+      try { root = tool.sessionsRoot?.() || null; } catch { /* ignore */ }
+      const [probe, auth] = await Promise.all([
+        probeCommand(probes[toolId]),
+        Promise.resolve(readAuthHint(toolId)),
+      ]);
+      results.push({
+        tool: toolId,
+        label: TOOL_LABELS[toolId] || toolId,
+        sessionsRoot: root,
+        sessionsRootExists: !!root && fs.existsSync(root),
+        versionProbe: probe,
+        auth,
+      });
+    }
+    return json(res, 200, { ok: true, results });
+  }
+
+  /* 全局搜索：标题/摘要命中即时返回；deep=1 时再扫会话正文（有时间与体积预算，避免卡住服务） */
+  if (req.method === 'GET' && resource === 'search') {
+    const q = String(url.searchParams.get('q') || '').trim();
+    const deep = url.searchParams.get('deep') === '1';
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 40, 1), 80);
+    if (!q) return json(res, 200, { q, deep, results: [], truncated: false });
+    const lower = q.toLowerCase();
+    const results = [];
+    const matchedNodes = new Set();
+    const projectName = (pid) => (db.projects.find((p) => p.id === pid)?.name || '');
+    for (const t of db.tasks) {
+      if (String(t.title || '').toLowerCase().includes(lower)) {
+        results.push({ type: 'task', taskId: t.id, title: t.title, projectName: projectName(t.projectId), nodeCount: (t.nodes || []).length, updatedAt: t.updatedAt });
+      }
+      for (const n of t.nodes || []) {
+        const sum = n.summary || {};
+        const fields = [
+          ['标题', n.title || ''],
+          ['首条提问', sum.firstUser || ''],
+          ['最近回复', sum.lastAssistant || ''],
+          ['涉及文件', (sum.files || []).join(' ')],
+        ];
+        const hit = fields.find(([, text]) => String(text).toLowerCase().includes(lower));
+        if (!hit) continue;
+        matchedNodes.add(n.id);
+        results.push({
+          type: 'session', taskId: t.id, taskTitle: t.title, projectName: projectName(t.projectId),
+          nodeId: n.id, tool: n.tool, title: n.title || '(会话)',
+          where: hit[0], snippet: searchSnippet(hit[1], q),
+          updatedAt: n.lastActivity || n.createdAt || t.updatedAt,
+        });
+      }
+    }
+    let truncated = false;
+    if (deep) {
+      const t0 = Date.now();
+      const BUDGET_MS = 4000, MAX_FILES = 80, MAX_BYTES = 40 * 1024 * 1024, MAX_HITS_PER_NODE = 2;
+      let files = 0;
+      let bytes = 0;
+      for (const t of db.tasks) {
+        for (const n of t.nodes || []) {
+          if (results.length >= limit) { truncated = true; break; }
+          if (matchedNodes.has(n.id) || !n.file || n.file.startsWith('sqlite:')) continue;
+          const parser = PARSERS[n.tool];
+          if (!parser) continue;
+          let st;
+          try { st = fs.statSync(n.file); } catch { continue; }
+          if (st.size > 12 * 1024 * 1024) continue;
+          if (files >= MAX_FILES || bytes + st.size > MAX_BYTES || Date.now() - t0 > BUDGET_MS) { truncated = true; break; }
+          files += 1;
+          bytes += st.size;
+          let evts;
+          try { evts = parseSessionEvents(parser, n.file); } catch { continue; }
+          let hits = 0;
+          for (const e of evts) {
+            if (e.kind !== 'user' && e.kind !== 'assistant') continue;
+            const text = String(e.text || '');
+            if (!text.toLowerCase().includes(lower)) continue;
+            results.push({
+              type: 'session', taskId: t.id, taskTitle: t.title, projectName: projectName(t.projectId),
+              nodeId: n.id, tool: n.tool, title: n.title || '(会话)',
+              where: e.kind === 'user' ? '用户消息' : 'AI 回复', snippet: searchSnippet(text, q),
+              updatedAt: n.lastActivity || n.createdAt || t.updatedAt,
+            });
+            if (++hits >= MAX_HITS_PER_NODE) break;
+            if (results.length >= limit) { truncated = true; break; }
+          }
+        }
+        if (results.length >= limit) break;
+      }
+    }
+    return json(res, 200, { q, deep, results: results.slice(0, limit), truncated: truncated || results.length > limit });
+  }
+
   /* ---------- 内嵌终端 ---------- */
   if (req.method === 'GET' && resource === 'terms') {
     return json(res, 200, { terms: termmod.listTerms() });
@@ -252,7 +446,13 @@ if (req.method === 'GET' && resource === 'stream') {
     const send = (evt) => {
       try { res.write(`data: ${JSON.stringify(evt)}\n\n`); } catch { /* 断开 */ }
     };
+    // SSE 事件序号：断线重连时浏览器会带 Last-Event-ID，跳过已渲染的事件，避免整段历史重复
+    const sendEvt = (evt, seq) => {
+      try { res.write(`id: ${seq}\ndata: ${JSON.stringify(evt)}\n\n`); } catch { /* 断开 */ }
+    };
+    const lastEventId = Number(req.headers['last-event-id'] || 0) || 0;
     let offset = 0;
+    let ordinal = 0; // 事件在文件中的绝对序号（被 tail 截掉的事件也计数，保证重连序号一致）
     let timer = null;
     let closed = false;
     const finish = () => {
@@ -280,14 +480,17 @@ if (req.method === 'GET' && resource === 'stream') {
           if (!t) continue;
           try { parser(JSON.parse(t), evts); } catch { /* 半行跳过 */ }
         }
-        // 首连带 tail：只推最后 N 条，更早的由前端经 /api/session-history 按需回溯
-        if (isFirst && tailLimit > 0 && evts.length > tailLimit) {
-          const skip = evts.length - tailLimit;
-          send({ type: 'history-truncated', skipped: skip, before: skip, total: evts.length });
-          for (const e of evts.slice(skip)) send(clipEvt(e));
-          return;
+        // 首连带 tail：只推最后 N 条，更早的由前端经 /api/session-history 按需回溯。
+        // 带 Last-Event-ID 的重连不截断——只补客户端还没收到的事件（否则重连会重复整段历史）。
+        const skipFirst = (isFirst && !lastEventId && tailLimit > 0 && evts.length > tailLimit)
+          ? evts.length - tailLimit : 0;
+        if (skipFirst > 0) send({ type: 'history-truncated', skipped: skipFirst, before: skipFirst, total: evts.length });
+        for (let i = 0; i < evts.length; i++) {
+          ordinal += 1;
+          if (i < skipFirst) continue;          // 被截掉的更早事件也计数，保证序号稳定
+          if (ordinal <= lastEventId) continue; // 重连时这些事件已经渲染过
+          sendEvt(clipEvt(evts[i]), ordinal);
         }
-        for (const e of evts) send(clipEvt(e));
       } catch { /* 读取失败下轮重试 */ }
     };
     pushNew(); // 先回放已有内容
@@ -381,41 +584,46 @@ if (req.method === 'GET' && resource === 'stream') {
     const detail = [];
     for (const g of groups.values()) {
       g.items.sort((a, b) => new Date(a.item.updatedAt) - new Date(b.item.updatedAt));
+      // 每个分组开始前重新加载看板：扫描耗时较长，避免用旧快照覆盖用户并发改动
+      const cur = store.load();
       const name = path.basename(g.cwd) || g.cwd;
       // 项目身份以目录为准：先按 cwd 匹配（手工建项目时填了目录也能复用），
       // 老数据没有 cwd 时按名称匹配并补绑目录，避免同一目录出现两个项目文件夹。
-      let project = db.projects.find((p) => p.cwd && normDir(p.cwd) === normDir(g.cwd));
+      let project = cur.projects.find((p) => p.cwd && normDir(p.cwd) === normDir(g.cwd));
       if (!project) {
         // 项目本身没记 cwd：用它已有任务里的会话目录反推（手工项目 + 接入过会话的情况）
-        project = db.projects.find((p) => db.tasks
+        project = cur.projects.find((p) => cur.tasks
           .filter((t) => t.projectId === p.id)
           .some((t) => (t.nodes || []).some((n) => n.cwd && normDir(n.cwd) === normDir(g.cwd))));
-        if (project && !project.cwd) { project.cwd = g.cwd; store.save(db); }
+        if (project && !project.cwd) { project.cwd = g.cwd; store.save(cur); }
       }
       if (!project) {
-        const byName = db.projects.find((p) => !p.cwd && (p.name || '').toLowerCase() === name.toLowerCase());
-        if (byName) { byName.cwd = g.cwd; store.save(db); project = byName; }
+        const byName = cur.projects.find((p) => !p.cwd && (p.name || '').toLowerCase() === name.toLowerCase());
+        if (byName) { byName.cwd = g.cwd; store.save(cur); project = byName; }
       }
       if (!project) {
         // 同名但不同目录：名字后面加父目录区分，避免看起来像重复项目
         let display = name;
-        if (db.projects.some((p) => (p.name || '').toLowerCase() === display.toLowerCase())) {
+        if (cur.projects.some((p) => (p.name || '').toLowerCase() === display.toLowerCase())) {
           const parent = path.basename(path.dirname(g.cwd));
-          display = parent ? `${name} · ${parent}` : `${name} (${db.projects.length + 1})`;
+          display = parent ? `${name} · ${parent}` : `${name} (${cur.projects.length + 1})`;
         }
-        project = store.createProject(db, display, g.cwd);
+        project = store.createProject(cur, display, g.cwd);
         projectsCreated++;
       }
       const taskTitle = `自动获取 · ${name}`;
-      let task = db.tasks.find((t) => t.projectId === project.id && t.title === taskTitle);
-      if (!task) { task = store.createTask(db, { projectId: project.id, title: taskTitle }); tasksCreated++; }
+      let task = cur.tasks.find((t) => t.projectId === project.id && t.title === taskTitle);
+      if (!task) { task = store.createTask(cur, { projectId: project.id, title: taskTitle }); tasksCreated++; }
       let added = 0;
       for (const { tool, item } of g.items) {
         if (known.has(String(item.id))) { skipped++; continue; }
         try {
           const conv = tool.read(item.file);
           if (!conv.messages.some((m) => m.role === 'user')) { skipped++; continue; }
-          store.addNode(db, task.id, makeNode(tool.name, conv));
+          // 每条会话落库前再重载一次：读取大文件期间用户可能新增/删除任务
+          const fresh = store.load();
+          if (!fresh.tasks.some((t) => t.id === task.id)) { skipped++; continue; }
+          store.addNode(fresh, task.id, makeNode(tool.name, conv));
           known.add(String(item.id));
           added++; nodesAdded++;
         } catch { readFail++; }
@@ -589,7 +797,9 @@ if (req.method === 'GET' && resource === 'stream') {
           tokens: injectedTokens, extra: { toTool: to.name, version: ckpt.version, llmUsed: ckpt.llmUsed, llmTokens: ckpt.llmTokens, embed, truthScan: !!truth?.text },
         });
 
-        const node = store.addNode(db, id, {
+        // 接力是长任务（LLM 检查点 10-60 秒），写回前重载看板，避免用旧快照覆盖用户并发改动
+        const freshDb = store.load();
+        const node = store.addNode(freshDb, id, {
           tool: to.name,
           sessionId: result.sessionId,
           file: result.file,
@@ -669,9 +879,23 @@ if (req.method === 'GET' && resource === 'stream') {
     // 消息与回复都写进会话文件，工作轨迹经捕获实时呈现。进程写完即退，不占终端。
     const headlessBusy = globalThis.__sbHeadlessBusy || (globalThis.__sbHeadlessBusy = new Set());
     const headlessStatus = globalThis.__sbHeadlessStatus || (globalThis.__sbHeadlessStatus = new Map());
+    const headlessChildren = globalThis.__sbHeadlessChildren || (globalThis.__sbHeadlessChildren = new Map());
+    const HEADLESS_TIMEOUT_MS = 10 * 60_000; // 看门狗：CLI 卡死时不能把该会话永久占住
     const HEADLESS_ENV = { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
     if (req.method === 'GET' && sub === 'headless-status') {
       return json(res, 200, { status: headlessStatus.get(url.searchParams.get('nodeId')) || null });
+    }
+    // 取消无头执行（前端状态条上的「取消执行」）
+    if (req.method === 'POST' && (sub === 'cancel-headless' || (sub === 'nodes' && subId && extra === 'cancel-headless'))) {
+      const body = await readBody(req);
+      const nid = subId || body.nodeId;
+      if (!nid || !headlessBusy.has(nid)) return json(res, 409, { error: '没有正在执行的任务' });
+      const child = headlessChildren.get(nid);
+      headlessStatus.set(nid, { running: false, exitCode: -2, canceled: true, stderrTail: '已取消', endedAt: Date.now(), tool: headlessStatus.get(nid)?.tool });
+      headlessBusy.delete(nid);
+      headlessChildren.delete(nid);
+      killProcessTree(child?.pid);
+      return json(res, 200, { ok: true });
     }
     if (req.method === 'POST' && sub === 'send-headless') {
       const body = await readBody(req);
@@ -698,20 +922,44 @@ if (req.method === 'GET' && resource === 'stream') {
       if (!cmd) return json(res, 400, { error: '该工具暂不支持无头发送' });
       headlessBusy.add(node.id);
       headlessStatus.set(node.id, { running: true, startedAt: Date.now(), tool: node.tool });
-      const child = spawn(cmd, { cwd, env: HEADLESS_ENV, windowsHide: true, shell: true });
+      let child;
+      try {
+        child = spawn(cmd, { cwd, env: HEADLESS_ENV, windowsHide: true, shell: true });
+      } catch (err) {
+        headlessBusy.delete(node.id);
+        headlessStatus.set(node.id, { running: false, exitCode: -1, stderrTail: String(err.message || err), endedAt: Date.now(), tool: node.tool });
+        return json(res, 500, { error: `启动无头执行失败: ${err.message}` });
+      }
       child.unref();
+      headlessChildren.set(node.id, child);
       let stderrTail = '';
+      let settled = false;
+      let watchdog = null;
+      const finish = (code, extra = {}) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        headlessBusy.delete(node.id);
+        headlessChildren.delete(node.id);
+        // 取消/超时已经写过终态，退出事件不要覆盖它
+        const prev = headlessStatus.get(node.id);
+        if (!prev || prev.running) headlessStatus.set(node.id, { running: false, exitCode: code, stderrTail, endedAt: Date.now(), tool: node.tool, ...extra });
+      };
+      watchdog = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        stderrTail = '执行超时（10 分钟），已终止';
+        headlessBusy.delete(node.id);
+        headlessChildren.delete(node.id);
+        headlessStatus.set(node.id, { running: false, exitCode: -1, timedOut: true, stderrTail, endedAt: Date.now(), tool: node.tool });
+        killProcessTree(child.pid);
+      }, HEADLESS_TIMEOUT_MS);
+      watchdog.unref?.();
       child.stderr?.on('data', (d) => { stderrTail = (stderrTail + d).slice(-600); });
       child.stdin?.write(message + '\n');
       child.stdin?.end();
-      child.on('exit', (code) => {
-        headlessBusy.delete(node.id);
-        headlessStatus.set(node.id, { running: false, exitCode: code, stderrTail, endedAt: Date.now(), tool: node.tool });
-      });
-      child.on('error', (err) => {
-        headlessBusy.delete(node.id);
-        headlessStatus.set(node.id, { running: false, exitCode: -1, stderrTail: String(err.message || err), endedAt: Date.now(), tool: node.tool });
-      });
+      child.on('exit', (code) => finish(code));
+      child.on('error', (err) => finish(-1, { stderrTail: String(err.message || err) }));
       return json(res, 200, { ok: true });
     }
 
@@ -916,7 +1164,9 @@ if (req.method === 'GET' && resource === 'stream') {
         }
         try {
           const conv = tool.read(created.file);
-          const newNode = store.addNode(db, id, makeNode(tool.name, conv, {
+          // 分支创建耗时数秒，写回前重载看板
+          const freshDb = store.load();
+          const newNode = store.addNode(freshDb, id, makeNode(tool.name, conv, {
             parentNodeId: node.id,
             resumeCommand: `claude --resume ${conv.id}`,
           }));
@@ -951,7 +1201,9 @@ if (req.method === 'GET' && resource === 'stream') {
       }
       try {
         const conv = tool.read(created.file);
-        const newNode = store.addNode(db, id, makeNode(tool.name, conv, {
+        // 分支创建耗时数秒，写回前重载看板
+        const freshDb = store.load();
+        const newNode = store.addNode(freshDb, id, makeNode(tool.name, conv, {
           parentNodeId: node.id,
           resumeCommand: `${resumeCommand} ${conv.id}`,
         }));
@@ -968,6 +1220,23 @@ if (req.method === 'GET' && resource === 'stream') {
       if (!node) return json(res, 404, { error: '节点不存在' });
       const ctx = computeContextUsage(node, termmod.tailTextForNode(node.id));
       return json(res, 200, { ctx: ctx || null });
+    }
+
+    /* 会话导出 Markdown：只读会话文件，供用户归档；Codex sqlite 会话暂不支持 */
+    if (req.method === 'GET' && sub === 'nodes' && subId && extra === 'export') {
+      const node = db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      const file = node.file && !String(node.file).startsWith('sqlite:') ? expandPath(node.file) : null;
+      if (!file || !fs.existsSync(file)) return json(res, 400, { error: '该会话没有可导出的本地文件（Codex 数据库会话暂不支持）' });
+      const parser = PARSERS[node.tool];
+      if (!parser) return json(res, 400, { error: '未知工具' });
+      const evts = parseSessionEvents(parser, file);
+      res.writeHead(200, {
+        'content-type': 'text/markdown; charset=utf-8',
+        'content-disposition': `attachment; filename="sbridge-${node.id}.md"`,
+        'cache-control': 'no-cache',
+      });
+      return res.end(renderSessionMarkdown(node, evts));
     }
 
     if (req.method === 'GET' && sub === 'nodes' && subId) {
@@ -1111,7 +1380,7 @@ function boardSessions(db, boardTaskId) {
 
 function openBrowser(port = PORT) {
   try {
-    spawn(`start "" "http://localhost:${port}"`, { shell: true, detached: true, stdio: 'ignore' }).unref();
+    spawn(`start "" "http://127.0.0.1:${port}"`, { shell: true, detached: true, stdio: 'ignore' }).unref();
   } catch { /* 打不开就让用户手动访问 */ }
 }
 
@@ -1196,11 +1465,14 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
-server.listen(PORT, () => {
+// 只监听本机回环：API 可启动终端/执行命令，暴露到局域网等于把本机交给同网段任何人
+server.listen(PORT, '127.0.0.1', () => {
   const bootMs = Math.round(process.uptime() * 1000);
-  console.log(`sbridge 看板已启动: http://localhost:${PORT}（进程启动 ${bootMs}ms）`);
+  console.log(`sbridge 看板已启动: http://127.0.0.1:${PORT}（进程启动 ${bootMs}ms）`);
   console.log(`数据目录: ${DATA_DIR}`);
   console.log('关闭此窗口即退出服务');
+  // 已退出的终端记录定期回收（每条最多 200KB 缓冲，长时间运行不回收会只增不减）
+  setInterval(() => { try { termmod.pruneTerms(); } catch { /* ignore */ } }, 10 * 60_000).unref?.();
   // 双击便携 exe 启动时自动打开浏览器；桌面版（Electron 壳负责窗口）与开发模式不弹
   if (IS_SEA && !process.env.SBRIDGE_NO_BROWSER) openBrowser();
   // 后台任务延后一拍：先让首屏 HTML/JS 请求走完，再做目录监听与协议文件同步
