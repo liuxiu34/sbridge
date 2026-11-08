@@ -97,12 +97,13 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     try {
       if (!forkAlertEl) return;
       if (!currentTask) { forkAlertEl.hidden = true; return; }
-      // 进度判断只看「实质代码活动」（编辑/命令/commit），不看会话文件 mtime：
-      // 用户跟旧会话闲聊几句不该把闲聊会话顶成「最新」。
+      // 跨会话比「谁更新」仍只看实质代码活动（闲聊不参与）；
+      // 链上后代用 lastCodeActivity || lastActivity || createdAt 兜底——接力生成的新会话
+      // 可能还没改代码，但它天然是本会话的后继，应该允许「跳过去」。
       const nodes = currentTask.nodes || [];
+      const nodeKey = (n) => String(n.lastCodeActivity || n.lastActivity || n.createdAt || '');
       const myCode = node.lastCodeActivity || '';
-      const hasAnyCode = nodes.some((n) => n.lastCodeActivity);
-      if (!myCode && !hasAnyCode) { forkAlertEl.hidden = true; return; }
+      const myKey = nodeKey(node);
       // 链内：只看「本会话的后代」（接力链上有继承关系的新会话才谈得上「跳过去」）
       const children = new Map();
       for (const n of nodes) {
@@ -116,51 +117,34 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       while (stack.length) {
         const cur = stack.pop();
         for (const c of children.get(cur) || []) {
-          if (c.lastCodeActivity && String(c.lastCodeActivity) > myCode) chainNewer.push(c);
+          if (nodeKey(c) > myKey) chainNewer.push(c);
           stack.push(c.id);
         }
       }
-      chainNewer.sort((a, b) => String(b.lastCodeActivity).localeCompare(String(a.lastCodeActivity)));
-      // 全任务：有更晚代码活动的会话（合并按钮的触发条件）
+      chainNewer.sort((a, b) => nodeKey(b).localeCompare(nodeKey(a)));
+      const hasAnyCode = nodes.some((n) => n.lastCodeActivity);
+      if (!myCode && !hasAnyCode && !chainNewer.length) { forkAlertEl.hidden = true; return; }
+      // 全任务：有更晚代码活动的会话（跨链提醒）
       const anyNewer = nodes
         .filter((n) => n.id !== node.id && n.lastCodeActivity && String(n.lastCodeActivity) > myCode)
         .sort((a, b) => String(b.lastCodeActivity).localeCompare(String(a.lastCodeActivity)));
       // 磁盘/ git 上的改动是否比本会话新（可能来自我们不解析的工具）
       const externalNewer = typeof projectExternalNewer === 'function' && projectExternalNewer(myCode);
-      if (!anyNewer.length && !externalNewer) { forkAlertEl.hidden = true; return; }
+      if (!anyNewer.length && !externalNewer && !chainNewer.length) { forkAlertEl.hidden = true; return; }
       const top = anyNewer[0] || null;
       forkAlertEl.hidden = false;
       const chainNote = chainNewer.length
-        ? `接力链上有更新的代码改动 ${toolLabel(chainNewer[0].tool)}「${escapeHtml(truncate(chainNewer[0].title || '(会话)', 28))}」· ${fmtTime(chainNewer[0].lastCodeActivity)}${chainNewer.length > 1 ? `（链上另有 ${chainNewer.length - 1} 个更新会话）` : ''}`
+        ? `接力链上有更新的会话 ${toolLabel(chainNewer[0].tool)}「${escapeHtml(truncate(chainNewer[0].title || '(会话)', 28))}」· ${fmtTime(nodeKey(chainNewer[0]) || chainNewer[0].createdAt)}${chainNewer.length > 1 ? `（链上另有 ${chainNewer.length - 1} 个更新会话）` : ''}`
         : anyNewer.length
           ? `其他会话有更新的代码改动（可能来自不同功能方向）：${toolLabel(top.tool)}「${escapeHtml(truncate(top.title || '(会话)', 28))}」· ${fmtTime(top.lastCodeActivity)}${anyNewer.length > 1 ? `（另有 ${anyNewer.length - 1} 个更新会话）` : ''}`
           : `项目里有比本会话更新的磁盘改动（可能来自其他工具）：${fmtTime(currentTask?.project?.lastChangeAt)}${currentTask?.project?.dirtyCount ? ` · ${currentTask.project.dirtyCount} 个未提交文件` : ''}。这里只看工作区事实，不受工具限制`;
       forkAlertEl.innerHTML = `<span class="fork-warn">${icon('history', 13)} 本会话可能未掌握项目最新进度：${chainNote}</span>
         ${chainNewer.length ? `<button type="button" class="btn-primary small" data-role="jumplatest">${icon('handoff', 12)} 跳转到最新会话</button>` : ''}
-        <button type="button" class="btn-ghost small" data-role="mergeckpt" title="把本任务所有会话的最新进展合并成一份摘要，并自动扫描项目现状（git 分支/提交/未提交改动/最近修改文件），生成一个掌握全部进度的新会话继续开发；原会话保留不动">${icon('context', 12)} 合并全部进度并继续</button>
         <button type="button" class="pbtn" data-role="forkclose" title="关闭提示">×</button>`;
       forkAlertEl.querySelector('[data-role="jumplatest"]')?.addEventListener('click', () => {
         forkAlertEl.hidden = true;
         openSessionTab(chainNewer[0].id); // 跳链上最新的；若它之后还有更新，它自己的提醒条会继续指路
       });
-      forkAlertEl.querySelector('[data-role="mergeckpt"]').onclick = async (ev) => {
-        const b = ev.currentTarget;
-        b.disabled = true;
-        b.textContent = '合并全部进度中…（十几秒）';
-        try {
-          const data = await api(`/api/tasks/${currentTask.id}/handoff-smart`, {
-            method: 'POST',
-            body: { toTool: node.tool, cwd: node.cwd || undefined, nodeId: node.id, launch: false, embed: false },
-          });
-          toast(`已生成合并会话（检查点 v${data.checkpointVersion}，含全部会话进展${data.truthScan ? ' + 项目现状扫描' : ''}），已在新标签打开`);
-          forkAlertEl.hidden = true;
-          openSessionTab(data.node.id);
-        } catch (err) {
-          toast(`合并失败: ${err.message}`);
-          b.disabled = false;
-          b.textContent = '合并全部进度并继续';
-        }
-      };
       forkAlertEl.querySelector('[data-role="forkclose"]').onclick = () => { forkAlertEl.hidden = true; };
     } catch { /* ignore */ }
   };
