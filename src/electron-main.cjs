@@ -25,19 +25,19 @@ const svcExe = isPackaged
 const SPLASH_URL = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html>
 <html><head><meta charset="utf-8"><style>
 html,body{height:100%;margin:0}
-body{display:grid;place-items:center;background:#f4f7f5;color:#191a1d;
+body{display:grid;place-items:center;background:#f7f5f1;color:#191a1d;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
 .wrap{display:flex;flex-direction:column;align-items:center;gap:12px}
-.logo{width:52px;height:52px;border-radius:14px;background:#17724a;color:#fff;
+.logo{width:52px;height:52px;border-radius:14px;background:#5b5bd6;color:#fff;
   display:grid;place-items:center;font-weight:700;font-size:18px;letter-spacing:.5px}
 .name{font-size:15px;font-weight:600}
 .tip{font-size:12px;color:#71727b}
 .bar{width:180px;height:3px;border-radius:2px;background:#e7e7ec;overflow:hidden}
-.bar i{display:block;height:100%;width:40%;background:#2f9e6a;border-radius:2px;
+.bar i{display:block;height:100%;width:40%;background:#8b87f0;border-radius:2px;
   animation:slide 1.1s ease-in-out infinite}
 @keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(280%)}}
 </style></head><body><div class="wrap">
-<div class="logo">sb</div><div class="name">sbridge</div>
+<div class="logo"><svg viewBox="0 0 28 28" width="26" height="26" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"><circle cx="7.8" cy="9.2" r="2.6"/><circle cx="20.2" cy="18.8" r="2.6" opacity=".58"/><path d="M10 10.5c3.6 0 3.1 5.3 7.6 6.6" opacity=".92"/></svg></div><div class="name">sbridge</div>
 <div class="tip">正在启动工作台…</div><div class="bar"><i></i></div>
 </div></body></html>`);
 

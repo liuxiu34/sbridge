@@ -173,14 +173,14 @@ const ICONS = {
   context: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/>',      // 上下文：同心圆
   handoff: '<path d="M4 12h13"/><path d="M12 6l6 6-6 6"/>',                         // 接力：传递箭头
   stop: '<rect x="6" y="6" width="12" height="12" rx="2.5"/>',                      // 停止
-  board: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/>', // 白板：三栏
-  split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/>',   // 分屏：对半
+  board: '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M8.8 4.5v15M15.2 4.5v15" opacity=".45"/><path d="M5.2 7.4h2.1M5.2 10.2h2.1M10.4 7.4h2.1M10.4 10.2h2.1M10.4 13h2.1M16.8 7.4h2.1" opacity=".85"/>', // 白板：三栏 + 卡片
+  split: '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M12 4.5v15" opacity=".55"/><circle cx="12" cy="10" r=".8" fill="currentColor" stroke="none" opacity=".7"/><circle cx="12" cy="12" r=".8" fill="currentColor" stroke="none" opacity=".7"/><circle cx="12" cy="14" r=".8" fill="currentColor" stroke="none" opacity=".7"/>', // 分屏：双栏 + 分隔点
   plus: '<path d="M12 5v14M5 12h14"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   play: '<path d="M7 5.5v13l11-6.5z"/>',                                            // 启动
   history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.4"/><path d="M3.5 3.5v4.9h4.9"/><path d="M12 7.5V12l3 2.5"/>', // 历史
   down: '<path d="M12 5v13M6.5 12.5 12 18l5.5-5.5"/>',                              // 回到底部
-  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>',
+  sun: '<circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v1.9M12 19.5v1.9M2.6 12h1.9M19.5 12h1.9M5.3 5.3l1.35 1.35M17.35 17.35l1.35 1.35M5.3 18.7l1.35-1.35M17.35 6.65l1.35-1.35"/>',
   moon: '<path d="M20.5 13.2A8.5 8.5 0 1 1 10.8 3.5a6.8 6.8 0 0 0 9.7 9.7z"/>',
   check: '<path d="M4.5 12.5l5 5L20 7"/>',                                          // 标记完成
   trash: '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13.5h9l1-13.5"/>',                 // 删除
@@ -191,7 +191,8 @@ const ICONS = {
   heart: '<path d="M19.5 12.6 12 20l-7.5-7.4a5 5 0 0 1 7.5-6.6 5 5 0 0 1 7.5 6.6z"/>', // 支持/赞助
   git: '<circle cx="6" cy="18" r="2.5"/><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M6 8.5v7"/><path d="M18 8.5v2a4 4 0 0 1-4 4H6"/>', // 项目/仓库
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>', // 复制
-  search: '<circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/>',             // 全局搜索
+  search: '<circle cx="10.6" cy="10.6" r="6.3"/><path d="M15.2 15.2 20.4 20.4"/><path d="M7.4 10.6a3.2 3.2 0 0 1 3.2-3.2" opacity=".5"/>', // 全局搜索
+  more: '<circle cx="12" cy="5.4" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="18.6" r="1.2" fill="currentColor" stroke="none"/>', // 更多
   download: '<path d="M12 3v12"/><path d="M7 10.5 12 15.5l5-5"/><path d="M4 20h16"/>', // 导出
   refresh: '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/>',              // 刷新/重新检查
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
