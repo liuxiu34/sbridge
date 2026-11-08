@@ -2,9 +2,10 @@
 
 /* ---------------- 顶部操作 ---------------- */
 $('btn-new-task').onclick = () => createTaskFlow(null);
-// btn-new-project 在 renderTree 的 group-label 里（每次重渲染重建），用委托绑定
+// btn-new-project / btn-tree-toggle 在 renderTree 的 group-label 里（每次重渲染重建），用委托绑定
 $('tree').addEventListener('click', (e) => {
-  if (e.target.closest('#btn-new-project')) createProjectFlow();
+  if (e.target.closest('#btn-new-project')) { createProjectFlow(); return; }
+  if (e.target.closest('#btn-tree-toggle')) { toggleTreeCollapsed(); }
 });
 // 自动获取项目：手动触发扫描三个工具的会话目录，按 cwd 分组导入（不自动运行）
 $('btn-settings').onclick = () => openSettingsModal();
