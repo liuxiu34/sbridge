@@ -889,7 +889,8 @@ if (req.method === 'GET' && resource === 'stream') {
 
       /* Claude 的 fork 要等第一条输入才落盘：先无头注入一条中性消息，再建节点 + 开交互终端 */
       if (node.tool === 'claude') {
-        const prompt = 'Continue the previous work.';
+        // 只要一句极短回复触发新会话落盘：不让模型读文件/跑工具，避免分支创建变慢
+        const prompt = 'Reply with OK only. Do not read files. Do not run any tools.';
         const exitCode = await new Promise((resolve) => {
           let child;
           try {
