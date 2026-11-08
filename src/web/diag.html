@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>sbridge 终端滚动诊断台</title>
+<style>
+  :root { --bg:#0d120f; --panel:#141a16; --line:#2a352d; --txt:#d7e4da; --dim:#8a9a90; --ok:#4f9b6d; --bad:#c95b5b; --warn:#d8a24a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 13px/1.5 "Segoe UI", system-ui, sans-serif; background:#0a0e0b; color:var(--txt); }
+  header { padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); display:flex; gap:18px; align-items:baseline; }
+  header h1 { font-size:15px; margin:0; }
+  header .sub { color:var(--dim); font-size:12px; }
+  .wrap { display:grid; grid-template-columns: 1fr 340px; gap:12px; padding:12px 16px; }
+  .term-panel { display:flex; flex-direction:column; gap:8px; min-width:0; }
+  .term-box { position:relative; background:var(--bg); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  #termMount { height: 100%; }
+  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .bar label { color:var(--dim); font-size:12px; }
+  button { font:inherit; font-size:12px; padding:5px 12px; border-radius:8px; border:1px solid var(--line);
+           background:#1a221c; color:var(--txt); cursor:pointer; }
+  button:hover { background:#22302a; }
+  button.primary { background:#2f7d4b; border-color:#3e9b5f; }
+  input[type=range] { accent-color:#4f9b6d; flex:1; }
+  .side { display:flex; flex-direction:column; gap:10px; min-width:0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .card h2 { font-size:13px; margin:0 0 8px; color:var(--dim); font-weight:600; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric: tabular-nums; }
+  td { padding:3px 4px; font-size:12px; border-top:1px solid #1d2620; }
+  td:first-child { color:var(--dim); }
+  td:last-child { text-align:right; font-weight:600; }
+  .verdict { font-size:12px; padding:6px 9px; border-radius:8px; margin-top:8px; }
+  .verdict.ok  { background:#16301f; color:#8fd8ab; border:1px solid #2a5e3f; }
+  .verdict.bad { background:#33191a; color:#e8a1a1; border:1px solid #6e3030; }
+  .timeline { display:flex; height:56px; border-radius:8px; overflow:hidden; border:1px solid var(--line); position:relative; }
+  .tl-cell { flex:1; min-width:2px; }
+  .log { font: 11px/1.6 Consolas, monospace; color:var(--dim); max-height:180px; overflow-y:auto;
+         background:#0c110e; border-radius:8px; padding:8px 10px; white-space:pre-wrap; word-break:break-all; }
+  .legend { font-size:11px; color:var(--dim); display:flex; gap:12px; margin-top:6px; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:middle; }
+  .view-toggle { display:flex; gap:0; }
+  .view-toggle button { border-radius:8px 0 0 8px; }
+  .view-toggle button:last-child { border-radius:0 8px 8px 0; margin-left:-1px; }
+  .view-toggle button.on { background:#2f7d4b; border-color:#3e9b5f; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🔬 sbridge 终端滚动诊断台</h1>
+  <span class="sub">播放真实 Pi TUI 回放样本，实时观测「滚动条为什么出现/消失」——不经过浏览器标签页</span>
+</header>
+<div class="wrap">
+  <div class="term-panel">
+    <div class="bar">
+      <label>终端可视行数（模拟窗口高度）</label>
+      <input id="rowsRange" type="range" min="10" max="150" value="30" step="1" />
+      <span id="rowsLabel" style="min-width:52px; font-weight:600;">30 行</span>
+      <button id="btnReplay" class="primary">▶ 重新回放</button>
+      <button id="btnScrollTop">⤴ 滚到最顶</button>
+    </div>
+    <div class="term-box" id="termBox">
+      <div id="termMount"></div>
+    </div>
+  </div>
+  <div class="side">
+    <div class="card">
+      <h2>实时指标</h2>
+      <table id="metrics">
+        <tr><td>可视行数 rows</td><td id="m-rows">—</td></tr>
+        <tr><td>缓冲总行数</td><td id="m-buffer">—</td></tr>
+        <tr><td>baseY（回滚起点）</td><td id="m-basey">—</td></tr>
+        <tr><td>回滚行数 = baseY</td><td id="m-sb">—</td></tr>
+        <tr><td>viewportY</td><td id="m-vy">—</td></tr>
+        <tr><td>旧判定 baseY&gt;0</td><td id="m-old">—</td></tr>
+        <tr><td>新判定（粘性）</td><td id="m-sticky">—</td></tr>
+        <tr><td>高屏回放中</td><td id="m-tall">—</td></tr>
+      </table>
+      <div id="verdict" class="verdict ok">—</div>
+    </div>
+    <div class="card">
+      <h2>baseY 时间线（回放全程采样）</h2>
+      <div class="timeline" id="timeline"></div>
+      <div class="legend">
+        <span><span class="dot" style="background:#4f9b6d"></span>baseY&gt;0（有回滚）</span>
+        <span><span class="dot" style="background:#c95b5b"></span>baseY=0（无回滚）</span>
+        <span><span class="dot" style="background:#d8a24a"></span>收缩时刻</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>事件日志</h2>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+<script src="/vendor/xterm.js"></script>
+<link rel="stylesheet" href="/vendor/xterm.css" />
+<script>
+const $ = (id) => document.getElementById(id);
+const REPLAY_ROWS = 150;
+let term, sample = '', shrinkTimer = 0, replayShrunk = false, sticky = false;
+let samples = [], shrinkMark = -1;
+
+function log(msg) {
+  const el = $('log');
+  const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  el.textContent = `[${t}] ${msg}\n` + el.textContent;
+}
+
+function buildTerm(rows) {
+  if (term) { try { term.dispose(); } catch {} }
+  sticky = false; replayShrunk = false; samples = []; shrinkMark = -1;
+  $('timeline').innerHTML = '';
+  term = new Terminal({
+    fontFamily: 'Consolas, monospace', fontSize: 12,
+    rows, cols: 100, scrollback: 5000,
+    theme: { background: '#0d120f', foreground: '#d7e4da' },
+  });
+  term.open($('termMount'));
+  // 拦截 alt screen（与生产一致）
+  const block = (p) => Array.isArray(p) && p.some(v => v === 47 || v === 1047 || v === 1049);
+  try { term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, block); } catch {}
+  try { term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, block); } catch {}
+  term.resize(100, rows);
+  log(`创建终端 ${rows} 行`);
+}
+
+function setRows(n) {
+  $('rowsLabel').textContent = n + ' 行';
+  if (!term) return;
+  try { term.resize(100, n); } catch {}
+  render();
+}
+
+async function replay() {
+  clearTimeout(shrinkTimer);
+  buildTerm(REPLAY_ROWS);           // 高屏回放（与生产修复一致）
+  replayShrunk = false;
+  $('btnReplay.disabled', );
+  log(`开始回放样本 ${sample.length} 字符（${REPLAY_ROWS} 行高屏）`);
+  let i = 0;
+  const chunk = 4000;
+  const step = () => {
+    if (i >= sample.length) { scheduleShrink(); return; }
+    const piece = sample.slice(i, i + chunk);
+    i += chunk;
+    try { term.write(piece); } catch (e) { log('write err: ' + e.message); }
+    sampleBaseY();                  // 同步采样（模拟 ws.onmessage）
+    setTimeout(step, 12);
+  };
+  step();
+}
+
+function sampleBaseY() {
+  try {
+    const baseY = term.buffer.active.baseY || 0;
+    samples.push(baseY);
+  } catch {}
+}
+
+function scheduleShrink() {
+  clearTimeout(shrinkTimer);
+  shrinkTimer = setTimeout(() => {
+    replayShrunk = true;
+    shrinkMark = samples.length - 1;
+    const rows = Number($('rowsRange').value);
+    try { term.resize(100, rows); } catch {}
+    log(`回放结束 → 收缩到 ${rows} 行（挤出 scrollback）`);
+    render();
+    drawTimeline();
+  }, 300);
+}
+
+function drawTimeline() {
+  const tl = $('timeline');
+  if (!samples.length) { tl.innerHTML = ''; return; }
+  // 采样太多时抽稀到 ~120 格
+  const maxCells = 120;
+  const stepN = Math.max(1, Math.ceil(samples.length / maxCells));
+  let html = '';
+  for (let i = 0; i < samples.length; i += stepN) {
+    const v = samples[i];
+    const isShrink = shrinkMark >= 0 && i >= shrinkMark && i < shrinkMark + stepN;
+    const color = isShrink ? '#d8a24a' : v > 0 ? '#4f9b6d' : '#c95b5b';
+    html += `<div class="tl-cell" style="background:${color}" title="t=${i} baseY=${v}"></div>`;
+  }
+  tl.innerHTML = html;
+}
+
+function render() {
+  if (!term) return;
+  try {
+    const b = term.buffer.active;
+    const rows = term.rows;
+    const baseY = b.baseY || 0;
+    const total = baseY + rows;
+    const oldOk = baseY > 0;
+    const nowOk = sticky || oldOk;
+    $('m-rows').textContent = rows;
+    $('m-buffer').textContent = total;
+    $('m-basey').textContent = baseY;
+    $('m-sb').textContent = baseY;
+    $('m-vy').textContent = b.viewportY ?? '—';
+    $('m-old').textContent = oldOk ? '✅ 有滚动条' : '❌ 隐藏';
+    $('m-old').style.color = oldOk ? '#8fd8ab' : '#e8a1a1';
+    $('m-sticky').textContent = nowOk ? '✅ 有滚动条' : '❌ 隐藏';
+    $('m-sticky').style.color = nowOk ? '#8fd8ab' : '#e8a1a1';
+    $('m-tall').textContent = !replayShrunk ? `${REPLAY_ROWS} 行（回放中）` : '已收缩';
+    const v = $('verdict');
+    if (!replayShrunk) { v.className = 'verdict ok'; v.textContent = '⏳ 高屏回放中…（150 行，TUI 把历史画满全屏）'; }
+    else if (baseY > 0) { v.className = 'verdict ok'; v.textContent = `✅ 有 ${baseY} 行真实回滚 —— 两种判定都有滚动条`; }
+    else if (sticky) { v.className = 'verdict ok'; v.textContent = `⚠️ 当前 baseY=0（TUI 覆写），但粘性判定保持滚动条可见；旧判定则隐藏 → 这就是旧版"滚动条消失"的根因`; }
+    else { v.className = 'verdict bad'; v.textContent = `❌ baseY=0 且从未溢出：${rows} 行窗口装下了全部内容 → 两种判定都无滚动条（大窗口场景，高屏回放修复的就是它）`; }
+  } catch (e) { log('render err: ' + e.message); }
+}
+
+$('rowsRange').addEventListener('input', (e) => setRows(Number(e.target.value)));
+$('btnReplay').addEventListener('click', replay);
+$('btnScrollTop').addEventListener('click', () => { try { term.scrollToTop(); render(); } catch {} });
+setInterval(() => { if (term) { sampleBaseY(); render(); drawTimeline(); } }, 250);
+
+fetch('/diag-sample.txt').then(r => r.ok ? r.text() : Promise.reject(r.status))
+  .then(t => { sample = t; log(`样本加载完成 ${t.length} 字符`); })
+  .catch(e => { log('样本加载失败: ' + e); sample = 'diagnostic sample unavailable\r\n'; });
+// 窗口心跳：独立 exe 模式靠这个判断窗口是否已关闭
+setInterval(() => { fetch('/ping').catch(() => {}); }, 2000);
+buildTerm(30);
+render();
+</script>
+</body>
+</html>

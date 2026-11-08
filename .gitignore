@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+dist/
+release/
+
+# 本地运行时数据（会话看板、上下文库、终端样本等，含个人使用数据）
+data/
+
+# 并行隔离工作区与子代理修复记录
+.sbridge-worktrees/
+.sbridge-fix/
+
+# 本机临时脚本 / 诊断配置（不要提交）
+*.tmp.mjs
+sea-config-diag.json
+
+# 日志与系统文件
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

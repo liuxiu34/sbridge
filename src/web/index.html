@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>sbridge · 任务看板</title>
+<link rel="stylesheet" href="/vendor/xterm.css" />
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">sb</div>
+      <div class="brand-text">
+        <strong>sbridge</strong>
+        <span>会话接力工作台</span>
+      </div>
+    </div>
+
+    <button class="btn-primary" id="btn-new-task">＋ 新建任务</button>
+    <button class="btn-ghost" id="btn-discover" title="扫描 Codex / Pi / Claude 的会话目录，按项目目录自动归组导入">自动获取项目</button>
+
+    <div class="tree" id="tree"></div>
+
+    <div class="mini-board" id="mini-board">
+      <div class="group-label"><span>会话链 · 当前任务</span><button class="link-btn" id="btn-board-view">白板视图</button></div>
+      <div id="mini-chain"><div class="empty-tree">选择任务后显示接力链</div></div>
+    </div>
+
+    <div class="sidebar-foot">
+      <div class="foot-row">
+        <button class="btn-ghost" id="btn-settings" title="打开会话自动启动终端等偏好设置">设置</button>
+        <button class="btn-ghost" id="btn-support" title="赞助支持 sbridge 持续更新" hidden>♥ 支持</button>
+      </div>
+      <div class="hint">数据保存在 data/board.json</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="sess-tabs" id="sess-tabs"></div>
+      <div class="actions" id="task-actions" hidden>
+        <button class="btn-ghost" id="btn-board-view2" title="查看完整白板">▦ 白板</button>
+        <button class="btn-ghost" id="btn-split" aria-pressed="false" title="左右分屏显示两个会话">◫ 分屏</button>
+        <span class="split-control" id="split-right-wrap" hidden>
+          <span>右侧</span>
+          <select class="split-select" id="split-right" aria-label="右侧会话"></select>
+        </span>
+        <!-- 其余常用度较低的操作用「更多」折叠，点开再选，避免顶栏铺满 -->
+        <span class="more-wrap" id="more-wrap">
+          <button class="btn-ghost" id="btn-more" aria-haspopup="menu" aria-expanded="false" title="更多操作">⋯</button>
+          <div class="more-menu" id="more-menu" role="menu" hidden>
+            <button class="more-item" id="btn-launch" role="menuitem">新开会话</button>
+            <button class="more-item" id="btn-attach" role="menuitem">接入已有会话</button>
+            <button class="more-item" id="btn-status" role="menuitem">标记完成</button>
+            <button class="more-item danger" id="btn-delete-task" role="menuitem">删除任务</button>
+          </div>
+        </span>
+      </div>
+      <button class="btn-ghost theme-toggle" id="btn-theme" title="切换浅色 / 深色主题">🌙</button>
+    </header>
+
+    <section class="workspace">
+      <!-- 完整白板视图（侧栏「白板视图」或顶栏按钮切换） -->
+      <div class="board-wrap" id="board-wrap" hidden>
+        <div class="empty" id="empty">
+          <div class="empty-icon">◇</div>
+          <h2>这里是一块白板</h2>
+          <p>任务下的每个会话以卡片铺开；接力生成的新会话自动连线成链。</p>
+        </div>
+        <div class="board" id="board">
+          <svg class="edges" id="edges"></svg>
+          <div class="cards" id="cards"></div>
+        </div>
+      </div>
+      <div class="board-hint" id="board-hint" hidden>左键框选 · 右键拖动白板 · 双击打开 · 右键卡片操作</div>
+      <!-- 会话面板区（主战场） -->
+      <div class="pane-area" id="pane-area">
+        <div class="workspace-empty" id="ws-empty">
+          <div class="empty-icon">⌨</div>
+          <h2>选择或新建一个会话</h2>
+          <p>点侧栏「会话链」里的卡片，或「新开会话 / 接入已有会话」。<br />agent 面板会在这里打开：结构化动态 + 直接输入，关页面不中断。</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="modal-mask" id="modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-head">
+      <h2 id="modal-title">对话框</h2>
+      <button class="btn-icon" id="btn-close-modal" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-foot" id="modal-foot"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+    <script src="/vendor/xterm.js"></script>
+    <script src="/vendor/addon-canvas.js"></script>
+    <script src="/vendor/addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
