@@ -28,12 +28,16 @@ function openModal({ title, bodyHtml, submitLabel = '确定', onSubmit }) {
 function createProjectFlow() {
   openModal({
     title: '新建项目文件夹',
-    bodyHtml: `<div class="field"><label>名称</label><input id="f-name" placeholder="例如：游戏原型 / API 代理" autocomplete="off" /></div>`,
+    bodyHtml: `
+      <div class="field"><label>名称</label><input id="f-name" placeholder="留空则用目录名" autocomplete="off" /></div>
+      <div class="field"><label>目录（可选）</label><input id="f-cwd" placeholder="例如：D:\\code\\my-app" autocomplete="off" /></div>
+      <div class="hint" style="color:#9a9aa4;margin-top:6px">填了目录后，自动获取项目会复用这个文件夹，不会为同一目录再建一个；同一目录不允许建两个项目。</div>`,
     submitLabel: '创建',
     onSubmit: async () => {
       const name = $('f-name').value.trim();
-      if (!name) throw new Error('请输入名称');
-      await api('/api/projects', { method: 'POST', body: { name } });
+      const cwd = $('f-cwd').value.trim();
+      if (!name && !cwd) throw new Error('名称和目录至少填一个');
+      await api('/api/projects', { method: 'POST', body: { name: name || undefined, cwd: cwd || undefined } });
       await loadState();
       toast('项目已创建');
     },

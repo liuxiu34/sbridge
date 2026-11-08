@@ -26,6 +26,8 @@ const PORT = Number(process.argv.find((a) => a.startsWith('--port='))?.split('='
 const TOOLS = { codex, pi, claude };
 const TOOL_LABELS = { codex: 'Codex', pi: 'Pi', claude: 'Claude Code' };
 const LAUNCH_COMMANDS = { codex: 'codex', pi: 'pi', claude: 'claude' };
+// 目录比较用：大小写、斜杠、尾斜杠不敏感
+const normDir = (p) => String(p || '').replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
 // 从会话 id 构造 resume 命令（「接入已有会话」的节点只有会话文件没有 resumeCommand 时用）
 const RESUME_COMMANDS = {
   pi: (id) => `pi --session ${id}`,
@@ -380,8 +382,30 @@ if (req.method === 'GET' && resource === 'stream') {
     for (const g of groups.values()) {
       g.items.sort((a, b) => new Date(a.item.updatedAt) - new Date(b.item.updatedAt));
       const name = path.basename(g.cwd) || g.cwd;
-      let project = db.projects.find((p) => (p.name || '').toLowerCase() === name.toLowerCase());
-      if (!project) { project = store.createProject(db, name); projectsCreated++; }
+      // 项目身份以目录为准：先按 cwd 匹配（手工建项目时填了目录也能复用），
+      // 老数据没有 cwd 时按名称匹配并补绑目录，避免同一目录出现两个项目文件夹。
+      let project = db.projects.find((p) => p.cwd && normDir(p.cwd) === normDir(g.cwd));
+      if (!project) {
+        // 项目本身没记 cwd：用它已有任务里的会话目录反推（手工项目 + 接入过会话的情况）
+        project = db.projects.find((p) => db.tasks
+          .filter((t) => t.projectId === p.id)
+          .some((t) => (t.nodes || []).some((n) => n.cwd && normDir(n.cwd) === normDir(g.cwd))));
+        if (project && !project.cwd) { project.cwd = g.cwd; store.save(db); }
+      }
+      if (!project) {
+        const byName = db.projects.find((p) => !p.cwd && (p.name || '').toLowerCase() === name.toLowerCase());
+        if (byName) { byName.cwd = g.cwd; store.save(db); project = byName; }
+      }
+      if (!project) {
+        // 同名但不同目录：名字后面加父目录区分，避免看起来像重复项目
+        let display = name;
+        if (db.projects.some((p) => (p.name || '').toLowerCase() === display.toLowerCase())) {
+          const parent = path.basename(path.dirname(g.cwd));
+          display = parent ? `${name} · ${parent}` : `${name} (${db.projects.length + 1})`;
+        }
+        project = store.createProject(db, display, g.cwd);
+        projectsCreated++;
+      }
       const taskTitle = `自动获取 · ${name}`;
       let task = db.tasks.find((t) => t.projectId === project.id && t.title === taskTitle);
       if (!task) { task = store.createTask(db, { projectId: project.id, title: taskTitle }); tasksCreated++; }
@@ -403,7 +427,22 @@ if (req.method === 'GET' && resource === 'stream') {
 
   if (req.method === 'POST' && resource === 'projects') {
     const body = await readBody(req);
-    return json(res, 200, store.createProject(db, body.name));
+    const cwdRaw = String(body.cwd || '').trim();
+    const cwd = cwdRaw ? expandPath(cwdRaw) : null;
+    if (cwd) {
+      if (!fs.existsSync(cwd)) return json(res, 400, { error: `目录不存在: ${cwd}` });
+      const clash = db.projects.find((p) => {
+        if (p.cwd && normDir(p.cwd) === normDir(cwd)) return true;
+        // 老数据/自动获取的项目可能没记 cwd：用其任务下的会话目录反推
+        return db.tasks
+          .filter((t) => t.projectId === p.id)
+          .some((t) => (t.nodes || []).some((n) => n.cwd && normDir(n.cwd) === normDir(cwd)));
+      });
+      if (clash) return json(res, 409, { error: `这个目录已经属于项目「${clash.name}」，不能重复创建` });
+    }
+    const name = String(body.name || (cwd ? path.basename(cwd) : '')).trim();
+    if (!name) return json(res, 400, { error: '请输入名称或目录' });
+    return json(res, 200, store.createProject(db, name, cwd));
   }
 
   if (req.method === 'DELETE' && resource === 'projects' && id) {

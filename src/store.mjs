@@ -37,10 +37,12 @@ export function save(db) {
 
 export const uid = () => crypto.randomBytes(6).toString('hex');
 
-export function createProject(db, name) {
+export function createProject(db, name, cwd = null) {
   const project = {
     id: uid(),
     name: String(name || '未命名项目').trim().slice(0, 60) || '未命名项目',
+    // 绑定的项目目录（自动获取按 cwd 归组；手工建项目填了目录也写这里）
+    cwd: cwd ? String(cwd) : null,
     createdAt: new Date().toISOString(),
   };
   db.projects.push(project);
