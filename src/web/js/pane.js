@@ -53,6 +53,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         <span class="pane-status" data-role="status"></span>
         <span class="pane-tools">
           <button type="button" class="pbtn" data-pact="stream" aria-pressed="false" title="查看 AI 工作轨迹（步骤、查询、结果与来源）">${icon('timeline')} 工作轨迹</button>
+          <button type="button" class="pbtn" data-pact="selfcheck" title="让这个会话自检：确认是否掌握项目最新、完整进度（只检查、不改文件）">${icon('radar')} 自检</button>
           <button type="button" class="pbtn ctx-btn" data-pact="ctx" title="会话上下文用量"><svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="ctx-ring-track" cx="10" cy="10" r="8"/><circle class="ctx-ring-val" cx="10" cy="10" r="8"/></svg><span class="ctx-ring-text" data-role="ctxtext">–</span></button>
           <button type="button" class="pbtn" data-pact="handoff" title="智能接力到其他工具">${icon('handoff')} 接力</button>
           <button type="button" class="pbtn danger" data-pact="stopterm" title="停止该会话的终端进程（相当于在终端里输入退出命令）" hidden>${icon('stop')} 停止</button>
@@ -246,6 +247,75 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     scrollEl,
   });
   cot.showEmpty('正在载入工作轨迹…');
+
+  /* 统一发送通道：输入框与「一键自检」共用。
+     该会话终端正在跑 → 写 PTY；否则无头执行（回复由工作轨迹 SSE 呈现）。 */
+  const deliverMessage = async (text) => {
+    if (!text) return;
+    if (boundRunningTerm(node)) { await sendToAgent(node, text); return; }
+    headlessRunning = true;
+    headlessStartedAt = Date.now();
+    cot.addLocalUser(text);
+    try {
+      await api(`/api/tasks/${currentTask.id}/send-headless`, { method: 'POST', body: { nodeId: node.id, message: text } });
+    } catch (err) {
+      headlessRunning = false;
+      cot.refresh();
+      throw err;
+    }
+    startHeadlessStatusPoll();
+  };
+
+  /** 一键自检：把磁盘事实交给当前会话，让它确认自己是否掌握最新/完整进度（只读，不改代码） */
+  async function buildSelfCheckMessage() {
+    let proj = null;
+    try {
+      proj = (await api(`/api/tasks/${currentTask.id}/project-state`)).project;
+    } catch { /* 扫描失败也继续：让 agent 自己看目录 */ }
+    const lines = ['【项目进度自检】只做检查，不要修改任何文件。'];
+    if (proj) {
+      lines.push('sbridge 刚扫描到的项目现状（磁盘事实，优先于对话记忆）：');
+      lines.push(`- 目录：${proj.cwd}`);
+      if (proj.isGit) {
+        lines.push(`- Git：${proj.branch || '?'} @ ${proj.head || '?'}${proj.headAt ? `（最后提交 ${fmtTime(proj.headAt)}）` : ''}`);
+      } else {
+        lines.push('- 非 git 目录，只能按文件修改时间判断。');
+      }
+      if (proj.dirtyCount) {
+        lines.push(`- 未提交改动 ${proj.dirtyCount} 个文件：`);
+        for (const d of (proj.dirty || []).slice(0, 10)) lines.push(`  ${d.code} ${d.path}`);
+        if (proj.dirtyCount > 10) lines.push(`  …另有 ${proj.dirtyCount - 10} 个`);
+      }
+      if (proj.recentFiles?.length) {
+        lines.push(`- 最近修改文件：${proj.recentFiles.slice(0, 6).map((f) => f.path).join('、')}`);
+      }
+    } else {
+      lines.push('sbridge 没扫描到项目目录，请按你当前的工作目录自行判断。');
+    }
+    lines.push(
+      '请检查并简短回答：',
+      '1) 你当前掌握的进度是否覆盖上面这些改动？列出你确认已处理的文件/需求。',
+      '2) 哪些改动或需求你不确定、没掌握？请现在读取相关文件确认，并在回答里说明读了什么。',
+      '3) 没有缺口就明确说「已掌握最新进度」；有缺口就说明下一步该做什么。',
+    );
+    return lines.join('\n');
+  }
+
+  const selfCheckBtn = host.querySelector('[data-pact="selfcheck"]');
+  selfCheckBtn?.addEventListener('click', async () => {
+    if (selfCheckBtn.disabled) return;
+    selfCheckBtn.disabled = true;
+    selfCheckBtn.classList.add('active');
+    try {
+      const msg = await buildSelfCheckMessage();
+      await deliverMessage(msg);
+      toast('已发送自检请求，回复会出现在工作轨迹里');
+    } catch (err) {
+      toast(`自检失败: ${err.message}`);
+    } finally {
+      setTimeout(() => { selfCheckBtn.disabled = false; selfCheckBtn.classList.remove('active'); }, 1200);
+    }
+  });
 
   /* 会话上下文用量环：优先用工具自己记录的数字（node.ctx：codex token_count / claude usage /
      pi 状态栏，服务端从会话文件与终端输出里读），读不到才退回按事件估算 */
@@ -515,23 +585,9 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
           applyStreamView(false);
           await ensureTerminal();
           slashSwitched = true;
-        } else if (boundRunningTerm(node)) {
-          // 该会话的终端 TUI 正在运行：写 PTY
-          await sendToAgent(node, text);
         } else {
-          // 主路径：无头执行，不经终端。先本地显示用户消息（CLI 落盘前也有反馈），
-          // 再启动状态轮询显示「正在执行」；回复由工作轨迹 SSE 实时呈现。
-          headlessRunning = true;
-          headlessStartedAt = Date.now();
-          cot.addLocalUser(text);
-          try {
-            await api(`/api/tasks/${currentTask.id}/send-headless`, { method: 'POST', body: { nodeId: node.id, message: text } });
-          } catch (err) {
-            headlessRunning = false;
-            cot.refresh();
-            throw err;
-          }
-          startHeadlessStatusPoll();
+          // 终端在跑就写 PTY，否则无头执行（由 deliverMessage 统一处理）
+          await deliverMessage(text);
         }
         ta.value = '';
       } catch (err) {
