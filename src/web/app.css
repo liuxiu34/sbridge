@@ -175,6 +175,13 @@ html, body {
   font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 6px;
 }
 .group-label .add:hover { background: var(--bg); color: var(--text); }
+/* 项目文件夹组头：收回 / 展开 + 新建 */
+.tree-actions { display: inline-flex; align-items: center; gap: 2px; }
+.group-label .tree-toggle {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font: inherit; font-size: 11px; line-height: 1; padding: 3px 6px; border-radius: 6px;
+}
+.group-label .tree-toggle:hover { background: var(--bg); color: var(--text); }
 
 .project { margin-bottom: 4px; }
 .project-name {

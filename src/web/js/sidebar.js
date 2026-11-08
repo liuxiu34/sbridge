@@ -1,6 +1,13 @@
 /* sbridge · 侧栏：项目/任务树 */
 
 /* ---------------- 侧栏 ---------------- */
+let treeCollapsed = false; // 项目文件夹下的任务是否全部收起
+
+function toggleTreeCollapsed() {
+  treeCollapsed = !treeCollapsed;
+  renderTree();
+}
+
 function renderTree() {
   const tree = $('tree');
   const tasksByProject = new Map();
@@ -19,7 +26,13 @@ function renderTree() {
       <span class="count" style="font-size:11px;color:#9a9aa4">${t.nodeCount}</span>
     </div>`;
 
-  let html = '<div class="group-label"><span>项目文件夹</span><button class="add" id="btn-new-project" title="新建项目文件夹">＋</button></div>';
+  let html = `<div class="group-label">
+    <span>项目文件夹</span>
+    <span class="tree-actions">
+      <button class="tree-toggle" id="btn-tree-toggle" title="${treeCollapsed ? '展开所有项目下的任务' : '收起所有项目下的任务'}">${treeCollapsed ? '展开' : '收回'}</button>
+      <button class="add" id="btn-new-project" title="新建项目文件夹">＋</button>
+    </span>
+  </div>`;
   if (!state.projects.length) {
     html += '<div class="empty-tree">还没有项目文件夹，先在底部新建一个。</div>';
   }
@@ -32,7 +45,7 @@ function renderTree() {
         <span class="count">${list.length}</span>
         <button class="add" data-new-task-in="${p.id}" title="在此项目下新建任务">＋</button>
       </div>
-      ${list.map(taskHtml).join('')}
+      <div class="project-tasks"${treeCollapsed ? ' hidden' : ''}>${list.map(taskHtml).join('')}</div>
     </div>`;
   }
 
