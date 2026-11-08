@@ -44,6 +44,7 @@ function renderTree() {
         <span>${escapeHtml(p.name)}</span>
         <span class="count">${list.length}</span>
         <button class="add" data-new-task-in="${p.id}" title="在此项目下新建任务">＋</button>
+        <button class="project-del" data-del-project="${p.id}" title="删除项目文件夹（任务移到独立任务，不会删除本地会话文件）">${icon('x', 11)}</button>
       </div>
       <div class="project-tasks"${treeCollapsed ? ' hidden' : ''}>${list.map(taskHtml).join('')}</div>
     </div>`;
@@ -62,5 +63,27 @@ function renderTree() {
       createTaskFlow(el.dataset.newTaskIn);
     });
   });
+  tree.querySelectorAll('[data-del-project]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteProjectFlow(el.dataset.delProject);
+    });
+  });
+}
+
+/** 删除项目文件夹：只移除看板分组，任务转为独立任务；本地会话文件一律不动 */
+async function deleteProjectFlow(projectId) {
+  const p = state.projects.find((x) => x.id === projectId);
+  if (!p) return;
+  if (!confirm(`删除项目文件夹「${p.name}」？\n\n项目下的任务会移到「独立任务」，只移除看板分组；不会删除任何本地会话文件或数据。`)) return;
+  try {
+    await api(`/api/projects/${projectId}`, { method: 'DELETE' });
+    if (currentTask?.projectId === projectId) {
+      currentTask.projectId = null;
+      try { currentTask = await api(`/api/tasks/${currentTask.id}`); } catch { /* ignore */ }
+    }
+    await loadState();
+    toast('项目文件夹已删除，任务已移到独立任务');
+  } catch (err) { toast(err.message); }
 }
 

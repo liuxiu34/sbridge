@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { ROOT } from './paths.mjs';
 
@@ -162,7 +163,6 @@ export function killTerm(id) {
     // PTY 是 cmd /c 包裹启动的：pty.kill() 只杀 cmd 壳，pi/codex 孙进程会变孤儿继续跑。
     // 用 taskkill /T 连整棵进程树一起杀；失败再退回 pty.kill() 兜底。
     try {
-      const { execSync } = require('node:child_process');
       execSync(`taskkill /PID ${t.pty.pid} /T /F`, { stdio: 'ignore' });
     } catch {
       try { t.pty.kill(); } catch { /* 已退出 */ }

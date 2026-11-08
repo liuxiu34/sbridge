@@ -28,18 +28,58 @@ html,body{height:100%;margin:0}
 body{display:grid;place-items:center;background:#f4f7f5;color:#191a1d;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
 .wrap{display:flex;flex-direction:column;align-items:center;gap:12px}
-.logo{width:52px;height:52px;border-radius:14px;background:#4b47e0;color:#fff;
+.logo{width:52px;height:52px;border-radius:14px;background:#17724a;color:#fff;
   display:grid;place-items:center;font-weight:700;font-size:18px;letter-spacing:.5px}
 .name{font-size:15px;font-weight:600}
 .tip{font-size:12px;color:#71727b}
 .bar{width:180px;height:3px;border-radius:2px;background:#e7e7ec;overflow:hidden}
-.bar i{display:block;height:100%;width:40%;background:#4b47e0;border-radius:2px;
+.bar i{display:block;height:100%;width:40%;background:#2f9e6a;border-radius:2px;
   animation:slide 1.1s ease-in-out infinite}
 @keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(280%)}}
 </style></head><body><div class="wrap">
 <div class="logo">sb</div><div class="name">sbridge</div>
 <div class="tip">正在启动工作台…</div><div class="bar"><i></i></div>
 </div></body></html>`);
+
+/** 版本比较：1.0.1 > 1.0.0 */
+function compareVersions(a, b) {
+  const pa = String(a || '').replace(/^v/i, '').split('.').map((x) => Number(x) || 0);
+  const pb = String(b || '').replace(/^v/i, '').split('.').map((x) => Number(x) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0) ? 1 : -1;
+  }
+  return 0;
+}
+
+/** 检查更新：启动时静默检查（有新版才提示），托盘菜单可手动检查 */
+async function checkUpdate(silent = true) {
+  try {
+    const res = await fetch('https://api.github.com/repos/liuxiu34/sbridge/releases/latest', {
+      headers: { 'User-Agent': 'sbridge-updater', Accept: 'application/vnd.github+json' },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rel = await res.json();
+    const latest = String(rel.tag_name || '').replace(/^v/i, '');
+    const current = app.getVersion();
+    if (compareVersions(latest, current) > 0) {
+      const r = await dialog.showMessageBox({
+        type: 'info',
+        title: '发现新版本',
+        message: `发现新版本 v${latest}（当前 v${current}）`,
+        detail: '是否打开下载页面？',
+        buttons: ['打开下载页', '稍后'],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (r.response === 0) shell.openExternal(rel.html_url || 'https://github.com/liuxiu34/sbridge/releases');
+    } else if (!silent) {
+      dialog.showMessageBox({ type: 'info', title: '检查更新', message: `已是最新版本 v${current}` });
+    }
+  } catch (err) {
+    logLine(`检查更新失败: ${err.message}`);
+    if (!silent) dialog.showMessageBox({ type: 'warning', title: '检查更新失败', message: '无法获取最新版本', detail: String(err.message || err) });
+  }
+}
 
 function logLine(msg) {
   const line = `[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${msg}`;
@@ -128,6 +168,7 @@ function createTray() {
     { label: '显示工作台', click: () => { win ? win.show() : createWindow(); } },
     { label: '服务状态：运行中', enabled: false },
     { type: 'separator' },
+    { label: '检查更新', click: () => checkUpdate(false) },
     { label: '开机自动启动', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
       click: (item) => { app.setLoginItemSettings({ openAtLogin: item.checked, path: process.execPath }); } },
     { type: 'separator' },
@@ -156,6 +197,8 @@ app.whenReady().then(async () => {
     logLine(`已切换到工作台页面 ${Date.now() - bootT0}ms`);
   }
   createTray();
+  // 静默检查更新：有新版才弹窗；失败只写日志，不打扰启动
+  setTimeout(() => { checkUpdate(true); }, 5000);
 });
 
 app.on('window-all-closed', () => { /* 托盘常驻：不退出 */ });

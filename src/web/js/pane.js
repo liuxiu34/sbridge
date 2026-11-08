@@ -56,7 +56,10 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
           <button type="button" class="pbtn" data-pact="selfcheck" title="让这个会话自检：确认是否掌握项目最新、完整进度（只检查、不改文件）">${icon('radar')} 自检</button>
           <button type="button" class="pbtn ctx-btn" data-pact="ctx" title="会话上下文用量"><svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="ctx-ring-track" cx="10" cy="10" r="8"/><circle class="ctx-ring-val" cx="10" cy="10" r="8"/></svg><span class="ctx-ring-text" data-role="ctxtext">–</span></button>
           <button type="button" class="pbtn" data-pact="handoff" title="智能接力到其他工具">${icon('handoff')} 接力</button>
+          <button type="button" class="pbtn" data-pact="export" title="导出该会话为 Markdown（只读）">${icon('download')}</button>
+          <button type="button" class="pbtn danger" data-pact="cancelheadless" title="取消正在执行的无头任务" hidden>${icon('stop')} 取消执行</button>
           <button type="button" class="pbtn danger" data-pact="stopterm" title="停止该会话的终端进程（相当于在终端里输入退出命令）" hidden>${icon('stop')} 停止</button>
+          <button type="button" class="pbtn danger" data-pact="remove" title="从任务移除该会话（只移除看板记录，不删除本地会话文件）">${icon('trash')}</button>
           <button type="button" class="pbtn danger" data-pact="close" title="关闭标签" aria-label="关闭标签">${icon('x', 13)}</button>
         </span>
       </div>
@@ -88,6 +91,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   const termBottomBtn = host.querySelector('[data-role="termbottom"]');
   const termHistoryBtn = host.querySelector('[data-role="termhistory"]');
   const streamBottomBtn = host.querySelector('[data-role="streambottom"]');
+  const cancelHeadlessBtn = host.querySelector('[data-pact="cancelheadless"]');
   // 进度分叉提示，两个按钮时机不同：
   //   跳转到最新会话 = 仅链内有更新的后代时出现（同链新会话取代了本会话）
   //   合并全部进度并继续 = 只要本会话不是全任务最新就出现（它没掌握全部最新进度，跨链动态也算）
@@ -210,7 +214,9 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       try { st = (await api(`/api/tasks/${currentTask.id}/headless-status?nodeId=${node.id}`)).status; } catch { /* 下轮再试 */ }
       if (st && !st.running) {
         headlessRunning = false;
-        if (st.exitCode !== 0 && st.stderrTail) {
+        if (st.canceled) toast('已取消执行');
+        else if (st.timedOut) toast('执行超时（10 分钟），已终止');
+        else if (st.exitCode !== 0 && st.stderrTail) {
           toast('执行失败: ' + st.stderrTail.slice(-140));
         }
         cot.setConnected(true);
@@ -253,6 +259,13 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       throw err;
     }
     startHeadlessStatusPoll();
+  };
+
+  /** 取消正在跑的无头任务（服务端会杀掉整棵进程树） */
+  const cancelHeadless = async () => {
+    try {
+      await api(`/api/tasks/${currentTask.id}/cancel-headless`, { method: 'POST', body: { nodeId: node.id } });
+    } catch (err) { toast(err.message); }
   };
 
   /** 一键自检：把磁盘事实交给当前会话，让它确认自己是否掌握最新/完整进度（只读，不改代码） */
@@ -426,6 +439,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     if (gone) return;
     const running = isTerminalRunning();
     if (stopBtn) stopBtn.hidden = !running; // 有活终端才显示「⏹ 停止」
+    if (cancelHeadlessBtn) cancelHeadlessBtn.hidden = !headlessRunning; // 无头执行中才显示「取消执行」
     if (headlessRunning) {
       const sec = Math.max(0, Math.round(headlessElapsed() / 1000));
       statusEl.textContent = `● 正在执行 · ${sec}s`;
@@ -593,6 +607,9 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   host.querySelector('[data-pact="close"]')?.addEventListener('click', () => closeTab(node.id));
   host.querySelector('[data-pact="ctx"]')?.addEventListener('click', () => openCtxModal(node));
   host.querySelector('[data-pact="handoff"]')?.addEventListener('click', () => openHandoffModal(node));
+  host.querySelector('[data-pact="export"]')?.addEventListener('click', () => exportNodeMarkdown(node));
+  host.querySelector('[data-pact="remove"]')?.addEventListener('click', () => removeTaskNodes([node.id]));
+  cancelHeadlessBtn?.addEventListener('click', () => cancelHeadless());
   // ⏹ 停止：杀掉该会话挂着的 PTY（等效在终端输入退出命令）；确认一次防误触
   const stopBtn = host.querySelector('[data-pact="stopterm"]');
   stopBtn?.addEventListener('click', () => stopNodeTerm(node));

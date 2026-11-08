@@ -27,8 +27,28 @@ export function load() {
   }
 }
 
+/** 每天首次保存前留一份看板备份（保留最近 30 天），误删/写坏时可手工恢复 */
+let lastBackupDay = null;
+function backupDaily() {
+  const day = new Date().toISOString().slice(0, 10);
+  if (lastBackupDay === day) return;
+  lastBackupDay = day;
+  try {
+    if (!fs.existsSync(DATA_FILE)) return;
+    const dir = path.join(DATA_DIR, 'backups');
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, `board.${day}.json`);
+    if (!fs.existsSync(dest)) fs.copyFileSync(DATA_FILE, dest);
+    const old = fs.readdirSync(dir).filter((f) => /^board\.\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+    while (old.length > 30) {
+      try { fs.rmSync(path.join(dir, old.shift())); } catch { /* ignore */ }
+    }
+  } catch { /* 备份失败不影响正常保存 */ }
+}
+
 export function save(db) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  backupDaily();
   const tmp = `${DATA_FILE}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2), 'utf8');
   fs.renameSync(tmp, DATA_FILE);
@@ -97,8 +117,11 @@ export function addNode(db, taskId, node) {
 export function removeNode(db, taskId, nodeId) {
   const task = db.tasks.find((t) => t.id === taskId);
   if (!task) return false;
+  const removed = task.nodes.find((n) => n.id === nodeId);
   const before = task.nodes.length;
   task.nodes = task.nodes.filter((n) => n.id !== nodeId);
+  // 只移除看板记录，本地会话文件一律不碰；分支链不能断：子会话接到被移除会话的上级
+  if (removed) for (const n of task.nodes) if (n.parentNodeId === nodeId) n.parentNodeId = removed.parentNodeId || null;
   save(db);
   return task.nodes.length !== before;
 }

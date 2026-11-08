@@ -333,3 +333,146 @@ async function handoff(node, toTool, btn = null) {
   }
 }
 
+/* ---------------- 会话导出 / 全局搜索 / 环境诊断 ---------------- */
+
+/** 导出会话为 Markdown（只读会话文件，不影响会话本身） */
+async function exportNodeMarkdown(node) {
+  if (!node || !currentTask) return;
+  try {
+    const res = await fetch(`/api/tasks/${currentTask.id}/nodes/${node.id}/export`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `导出失败 (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(node.title || '会话').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60) || '会话'}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    toast('已导出 Markdown');
+  } catch (err) { toast(err.message); }
+}
+
+/** 全局搜索：标题/摘要即时搜，勾选后再扫正文；点结果直接打开会话 */
+function openSearchModal() {
+  let debounce = 0;
+  let reqSeq = 0;
+  const close = openModal({
+    title: '全局搜索',
+    bodyHtml: `
+      <div class="search-box">
+        <input id="search-q" placeholder="搜索任务、会话标题与摘要…" autocomplete="off" />
+        <label class="search-deep"><input type="checkbox" id="search-deep" /> 同时搜索会话正文（较慢，最多约 4 秒）</label>
+      </div>
+      <div class="hint" id="search-hint" style="color:#9a9aa4;margin-bottom:8px">输入关键词开始搜索</div>
+      <div class="search-results" id="search-results"></div>`,
+    submitLabel: '',
+  });
+  const $q = () => $('search-q');
+  const $hint = () => $('search-hint');
+  const $results = () => $('search-results');
+
+  const renderResults = (results) => {
+    if (!results.length) { $results().innerHTML = '<div class="empty-tree">没有匹配的会话</div>'; return; }
+    $results().innerHTML = results.map((r, i) => (r.type === 'task'
+      ? `<button type="button" class="search-row" data-sr="${i}">
+          <span class="chip">任务</span>
+          <span class="search-main">
+            <span class="search-title">${escapeHtml(r.title)}</span>
+            <span class="search-sub">${escapeHtml(r.projectName || '独立任务')} · ${r.nodeCount} 个会话</span>
+          </span>
+        </button>`
+      : `<button type="button" class="search-row" data-sr="${i}">
+          <span class="chip ${r.tool}">${escapeHtml(toolLabel(r.tool))}</span>
+          <span class="search-main">
+            <span class="search-title">${escapeHtml(r.title)}</span>
+            <span class="search-sub">${escapeHtml(r.taskTitle || '')} · ${escapeHtml(r.where || '')} · ${fmtTime(r.updatedAt)}</span>
+            <span class="search-snippet">${escapeHtml(r.snippet || '')}</span>
+          </span>
+        </button>`)).join('');
+    $results().querySelectorAll('[data-sr]').forEach((btn) => {
+      btn.onclick = async () => {
+        const r = results[Number(btn.dataset.sr)];
+        close();
+        if (r.type === 'task') { openTask(r.taskId); return; }
+        try {
+          await openTask(r.taskId);
+          openSessionTab(r.nodeId);
+        } catch (err) { toast(err.message); }
+      };
+    });
+  };
+
+  const run = async () => {
+    const q = $q().value.trim();
+    const deep = $('search-deep').checked;
+    const seq = ++reqSeq;
+    if (!q) { $results().innerHTML = ''; $hint().textContent = '输入关键词开始搜索'; return; }
+    $hint().textContent = deep ? '深度搜索中（最多约 4 秒）…' : '搜索中…';
+    try {
+      const data = await api(`/api/search?q=${encodeURIComponent(q)}&deep=${deep ? 1 : 0}&limit=50`);
+      if (seq !== reqSeq) return;
+      $hint().textContent = data.results.length
+        ? `${data.results.length} 条结果${data.truncated ? '（结果较多，已截断）' : ''}`
+        : '没有找到匹配';
+      renderResults(data.results);
+    } catch (err) {
+      if (seq === reqSeq) $hint().textContent = `搜索失败: ${err.message}`;
+    }
+  };
+
+  $q().addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(run, 400); });
+  $q().addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(debounce); run(); } });
+  setTimeout(() => $q().focus(), 30);
+  return close;
+}
+
+/** 环境诊断：CLI 安装 / 会话目录 / 登录与密钥配置（只读检测） */
+function openEnvCheckModal() {
+  const close = openModal({
+    title: '环境诊断',
+    bodyHtml: `
+      <div class="hint" style="display:flex;align-items:center;gap:8px;color:#9a9aa4;margin-bottom:10px">
+        <span id="env-hint">正在检测…（每个工具执行一次 --version，最多约 15 秒）</span>
+        <button type="button" class="btn-ghost" id="env-refresh">${icon('refresh')} 重新检测</button>
+      </div>
+      <div id="env-results"></div>`,
+    submitLabel: '',
+  });
+
+  const render = async () => {
+    $('env-hint').textContent = '正在检测…';
+    $('env-results').innerHTML = '';
+    try {
+      const data = await api('/api/env-check');
+      $('env-hint').textContent = `共检测 ${data.results.length} 个工具（只读，不改任何配置）`;
+      $('env-results').innerHTML = data.results.map((r) => {
+        const verOk = !!r.versionProbe?.ok;
+        const verText = verOk
+          ? (r.versionProbe.output || '命令可用')
+          : (r.versionProbe?.timeout ? '检测超时' : (r.versionProbe?.error || '未检测到命令'));
+        return `<div class="env-row">
+          <div class="env-head">
+            <span class="chip ${r.tool}">${escapeHtml(r.label)}</span>
+            <span class="env-badge ${verOk ? 'ok' : 'bad'}">${verOk ? '已安装' : '未检测到'}</span>
+            <span class="env-badge ${r.auth?.ok ? 'ok' : 'bad'}">${r.auth?.ok ? '凭证就绪' : '缺少登录/密钥'}</span>
+          </div>
+          <div class="env-line">版本：${escapeHtml(truncate(verText, 180))}</div>
+          <div class="env-line">会话目录：${escapeHtml(r.sessionsRoot || '(未知)')}${r.sessionsRootExists ? '' : '（不存在）'}</div>
+          <div class="env-line">凭证：${escapeHtml(r.auth?.detail || '')}</div>
+        </div>`;
+      }).join('');
+    } catch (err) {
+      $('env-hint').textContent = '检测失败';
+      $('env-results').innerHTML = `<div class="empty-tree">${escapeHtml(err.message)}</div>`;
+    }
+  };
+  $('env-refresh').onclick = render;
+  render();
+  return close;
+}
+

@@ -2,6 +2,14 @@
 
 /* ---------------- 顶部操作 ---------------- */
 $('btn-new-task').onclick = () => createTaskFlow(null);
+$('btn-search').onclick = () => openSearchModal();
+// Ctrl/Cmd+K 打开全局搜索（和浏览器地址栏快捷键冲突时以应用为准）
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    openSearchModal();
+  }
+});
 // btn-new-project / btn-tree-toggle 在 renderTree 的 group-label 里（每次重渲染重建），用委托绑定
 $('tree').addEventListener('click', (e) => {
   if (e.target.closest('#btn-new-project')) { createProjectFlow(); return; }

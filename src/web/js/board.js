@@ -211,6 +211,26 @@ async function stopNodeTerm(node) {
   } catch (err) { toast(err.message); }
 }
 
+/** 从任务移除会话：只删看板记录，本地会话文件一律不动；分支子会话自动接到上一级 */
+async function removeTaskNodes(ids) {
+  if (!currentTask || !ids?.length) return;
+  const nodes = ids.map((nid) => findNode(nid)).filter(Boolean);
+  if (!nodes.length) return;
+  const label = nodes.length === 1
+    ? `会话「${truncate(nodes[0].title || '(会话)', 30)}」`
+    : `选中的 ${nodes.length} 个会话`;
+  if (!confirm(`从任务移除${label}？\n\n只移除看板记录，不会删除任何本地会话文件；分支链上的子会话会自动接到上一级。`)) return;
+  try {
+    for (const nid of nodes.map((n) => n.id)) {
+      await api(`/api/tasks/${currentTask.id}/nodes/${nid}`, { method: 'DELETE' });
+      if (openTabs.includes(nid)) closeTab(nid);
+    }
+    if (boardMode) clearBoardSelection();
+    await refreshTask();
+    toast(`已移除 ${nodes.length} 个会话（本地文件未删除）`);
+  } catch (err) { toast(err.message); }
+}
+
 /** 白板卡片右键操作菜单：接力在最上面，其余是这个会话的全部操作 */
 function openBoardMenu(nodeId, x, y) {
   closeBoardMenu();
@@ -223,7 +243,9 @@ function openBoardMenu(nodeId, x, y) {
     { icon: 'timeline', label: '打开工作轨迹', run: () => openSessionTab(node.id) },
     { icon: 'split', label: '分屏打开', run: () => openInOtherSlot(node.id) },
     { icon: 'context', label: '会话上下文', run: () => openCtxModal(node) },
+    { icon: 'download', label: '导出 Markdown（只读）', run: () => exportNodeMarkdown(node) },
     running ? { icon: 'stop', label: '停止终端', danger: true, run: () => stopNodeTerm(node) } : null,
+    { icon: 'trash', label: `从任务移除${boardSel.size > 1 ? `选中的 ${boardSel.size} 个会话` : '会话'}（不删本地文件）`, danger: true, run: () => removeTaskNodes([...boardSel]) },
     opened ? { icon: 'x', label: '关闭标签', run: () => closeTab(node.id) } : null,
   ].filter(Boolean);
   const el = document.createElement('div');
