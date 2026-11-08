@@ -1,0 +1,17 @@
+{
+  "main": "dist/app.cjs",
+  "output": "dist/sea-prep.blob",
+  "disableExperimentalSEAWarning": true,
+  "useSnapshot": false,
+  "useCodeCache": true,
+  "assets": {
+    "web/index.html": "src/web/index.html",
+    "web/app.js": "src/web/app.js",
+    "web/app.css": "src/web/app.css",
+    "web/diag.html": "src/web/diag.html",
+    "web/vendor/xterm.js": "src/web/vendor/xterm.js",
+    "web/vendor/xterm.css": "src/web/vendor/xterm.css",
+    "web/vendor/addon-fit.js": "src/web/vendor/addon-fit.js",
+    "web/vendor/addon-canvas.js": "src/web/vendor/addon-canvas.js"
+  }
+}
