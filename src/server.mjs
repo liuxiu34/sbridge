@@ -23,7 +23,7 @@ import { scanProjectState, scanProjectTruth, renderProjectTruth } from './projec
 import { expandPath, samePath, truncate, estimateTokens } from './util.mjs';
 import { IS_SEA, ROOT, WEB_DIR, DATA_DIR } from './paths.mjs';
 
-const PORT = Number(process.argv.find((a) => a.startsWith('--port='))?.split('=')[1] || 4310);
+let PORT = Number(process.argv.find((a) => a.startsWith('--port='))?.split('=')[1] || 4310);
 const TOOLS = { codex, pi, claude };
 const TOOL_LABELS = { codex: 'Codex', pi: 'Pi', claude: 'Claude Code' };
 const LAUNCH_COMMANDS = { codex: 'codex', pi: 'pi', claude: 'claude' };
@@ -1443,14 +1443,37 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.log(`端口 ${PORT} 已被占用——可能已有 sbridge 在运行，直接打开页面。`);
-    openBrowser();
-    process.exit(0);
-  }
-  throw err;
-});
+/** 探测某个端口上是不是已有的 sbridge（避免把别的程序当成本应用） */
+function isSbridgeAt(port) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/tools', timeout: 800 }, (res) => {
+      let raw = '';
+      res.on('data', (d) => { raw += d; });
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(raw);
+          resolve(Array.isArray(data.tools) && data.tools.some((t) => ['codex', 'pi', 'claude'].includes(t.id)));
+        } catch { resolve(false); }
+      });
+    });
+    req.on('timeout', () => { try { req.destroy(); } catch { /* ignore */ } resolve(false); });
+    req.on('error', () => resolve(false));
+  });
+}
+
+/** 尝试监听指定端口；EADDRINUSE 时抛错交给上层换端口 */
+function listenOn(port) {
+  return new Promise((resolve, reject) => {
+    const onError = (err) => { server.removeListener('listening', onListening); reject(err); };
+    const onListening = () => {
+      server.removeListener('error', onError);
+      resolve(server.address()?.port || port);
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, '127.0.0.1');
+  });
+}
 
 /* ---------- 内嵌终端 WebSocket ---------- */
 server.on('upgrade', (req, socket, head) => {
@@ -1473,15 +1496,18 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 // 只监听本机回环：API 可启动终端/执行命令，暴露到局域网等于把本机交给同网段任何人
-server.listen(PORT, '127.0.0.1', () => {
+function onStarted(port) {
+  PORT = port;
+  console.log(`SBRIDGE_PORT=${port}`); // 机器可读：Electron 壳据此加载正确端口（冲突时会自动换端口）
   const bootMs = Math.round(process.uptime() * 1000);
-  console.log(`sbridge 看板已启动: http://127.0.0.1:${PORT}（进程启动 ${bootMs}ms）`);
+  console.log(`sbridge 看板已启动: http://127.0.0.1:${port}（进程启动 ${bootMs}ms）`);
   console.log(`数据目录: ${DATA_DIR}`);
   console.log('关闭此窗口即退出服务');
+  server.on('error', (err) => console.error(`[服务错误] ${err.message}`));
   // 已退出的终端记录定期回收（每条最多 200KB 缓冲，长时间运行不回收会只增不减）
   setInterval(() => { try { termmod.pruneTerms(); } catch { /* ignore */ } }, 10 * 60_000).unref?.();
   // 双击便携 exe 启动时自动打开浏览器；桌面版（Electron 壳负责窗口）与开发模式不弹
-  if (IS_SEA && !process.env.SBRIDGE_NO_BROWSER) openBrowser();
+  if (IS_SEA && !process.env.SBRIDGE_NO_BROWSER) openBrowser(port);
   // 后台任务延后一拍：先让首屏 HTML/JS 请求走完，再做目录监听与协议文件同步
   setTimeout(() => {
     // 后台自动捕获：监听各工具会话目录，文件变化即增量入库
@@ -1494,4 +1520,43 @@ server.listen(PORT, '127.0.0.1', () => {
     // 子代理修复协议随软件分发：装了 sbridge 的机器，Codex/Pi 自动获得子代理修复能力（幂等）
     ensureSubagentProtocols();
   }, 200);
+}
+
+/** 端口被占时自动往后找（最多 20 个），都满则交给系统分配 */
+async function startServer() {
+  const wanted = PORT;
+  const candidates = [wanted];
+  for (let i = 1; i <= 20; i++) candidates.push(wanted + i);
+  for (const p of candidates) {
+    try {
+      onStarted(await listenOn(p));
+      return;
+    } catch (err) {
+      if (err.code !== 'EADDRINUSE') {
+        console.error(`[启动失败] 端口 ${p}: ${err.message}`);
+        process.exit(1);
+      }
+      // 端口上已有 sbridge → 便携版复用现有实例；桌面版传 SBRIDGE_NO_REUSE=1，
+      // 强制用自己的实例，避免连到别的数据目录。
+      if (!process.env.SBRIDGE_NO_REUSE && await isSbridgeAt(p)) {
+        PORT = p;
+        console.log(`SBRIDGE_REUSE_PORT=${p}`);
+        console.log(`端口 ${p} 上已有 sbridge 在运行，直接复用现有实例`);
+        if (IS_SEA && !process.env.SBRIDGE_NO_BROWSER) openBrowser(p);
+        process.exit(0);
+      }
+      console.log(`端口 ${p} 被其他程序占用，自动尝试下一个端口…`);
+    }
+  }
+  try {
+    onStarted(await listenOn(0));
+  } catch (err) {
+    console.error(`[启动失败] 无法分配可用端口: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+startServer().catch((err) => {
+  console.error(`[启动失败] ${err.message}`);
+  process.exit(1);
 });

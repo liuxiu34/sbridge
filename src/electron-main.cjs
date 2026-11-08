@@ -103,14 +103,33 @@ function startService() {
       ...process.env,
       SBRIDGE_DATA: path.join(app.getPath('appData'), 'sbridge', 'data'),
       SBRIDGE_NO_BROWSER: '1',
+      // 桌面版不复用别的 sbridge 实例：端口被占时自己换端口起新服务，
+      // 避免连到一个使用其它数据目录（比如 dev）的旧实例。
+      SBRIDGE_NO_REUSE: '1',
     },
   });
-  svc.stdout.on('data', (d) => logLine(`[svc] ${String(d).trim()}`));
+  let reusingService = false;
+  svc.stdout.on('data', (d) => {
+    const text = String(d).trim();
+    logLine(`[svc] ${text}`);
+    // 服务会打印 SBRIDGE_PORT=<实际端口>；端口冲突自动换端口后靠这里同步
+    const m = text.match(/SBRIDGE_(REUSE_)?PORT=(\d+)/);
+    if (m) {
+      const p = Number(m[2]);
+      if (p > 0 && p !== svcPort) {
+        svcPort = p;
+        logLine(`服务实际端口: ${svcPort}`);
+      }
+      if (m[1]) reusingService = true;
+    }
+  });
   svc.stderr.on('data', (d) => logLine(`[svc:err] ${String(d).trim()}`));
   svc.on('exit', (code) => {
     logLine(`服务退出 code=${code}`);
     svc = null;
     if (!quitting && win) {
+      // 复用了已有 sbridge 实例时服务进程会正常退出，不要反复重启
+      if (reusingService) { logLine('已复用现有 sbridge 服务'); return; }
       // 服务意外退出：提示并允许重启
       dialog.showErrorBox('sbridge', `后端服务意外退出（code=${code}），应用将重启服务。`);
       setTimeout(startService, 1000);
