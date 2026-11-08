@@ -1350,6 +1350,7 @@ svg.ico { flex: none; vertical-align: -2px; }
   box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 26%, transparent);
 }
 .brand-text strong { letter-spacing: -.01em; }
+.brand-mark svg { width: 18px; height: 18px; display: block; }
 .btn-primary {
   background: var(--accent); border-radius: 10px;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 22%, transparent);
