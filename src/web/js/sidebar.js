@@ -39,7 +39,7 @@ function renderTree() {
   for (const p of state.projects) {
     const list = tasksByProject.get(p.id) || [];
     html += `<div class="project">
-      <div class="project-name">
+      <div class="project-name" title="${p.cwd ? escapeHtml(p.cwd) : ''}">
         <span class="project-dot"></span>
         <span>${escapeHtml(p.name)}</span>
         <span class="count">${list.length}</span>
