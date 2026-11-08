@@ -157,6 +157,17 @@ export function pruneTerms(maxIdleMs = 3600_000) {
   }
 }
 
+/** 一键关闭终端：tool 为空时关掉全部，否则只关该工具下所有运行中的终端 */
+export function killAll(tool = null) {
+  let killed = 0;
+  for (const [id, t] of terms) {
+    if (t.exitCode !== null) continue;
+    if (tool && t.tool !== tool) continue;
+    if (killTerm(id)) killed += 1;
+  }
+  return killed;
+}
+
 export function killTerm(id) {
   const t = terms.get(id);
   if (t && t.exitCode === null) {
