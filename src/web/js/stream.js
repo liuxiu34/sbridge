@@ -269,12 +269,12 @@ function createCotTimeline(listEl, options) {
       try { document.execCommand('copy'); } catch { /* ignore */ }
       ta.remove();
     }
-    const label = btn.querySelector('span');
+    const orig = btn.innerHTML;
     btn.classList.add('copied');
-    if (label) label.textContent = '已复制';
+    btn.innerHTML = icon('check', 12);
     setTimeout(() => {
       btn.classList.remove('copied');
-      if (label) label.textContent = '复制';
+      btn.innerHTML = orig;
     }, 1200);
   });
   const openDetails = new Set();
@@ -480,7 +480,7 @@ function createCotTimeline(listEl, options) {
           <div class="chat-msg-body">
             <div class="chat-bubble">${step.bodyHtml || `<div class="sev-text">${renderMessageHtml(step.text || '', isUser ? 3000 : 6000)}</div>`}</div>
             <div class="chat-actions">
-              <button type="button" class="chat-copy" data-copy="${steps.indexOf(step)}" title="复制这条消息">${icon('copy', 12)}<span>复制</span></button>
+              <button type="button" class="chat-copy" data-copy="${steps.indexOf(step)}" title="复制这条消息">${icon('copy', 12)}</button>
             </div>
           </div>
         </div>`;

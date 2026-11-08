@@ -670,7 +670,7 @@ html, body {
 }
 
 /* ---------- Chat 风工作轨迹（参考 ChatGPT 对话流） ---------- */
-.chat-stream { max-width: 1120px; width: 100%; margin: 0 auto; padding: 14px 6px 10px; }
+.chat-stream { max-width: 960px; width: 100%; margin: 0 auto; padding: 18px 24px 14px; }
 .chat-thread { display: flex; flex-direction: column; }
 .chat-msg { display: flex; margin: 0 0 10px; align-items: flex-start; }
 .chat-msg.is-user { justify-content: flex-end; margin-top: 6px; } /* 上一段 AI 回复与下一个问题之间再留一点空 */
@@ -681,10 +681,10 @@ html, body {
 .chat-actions { display: flex; margin-top: 2px; padding: 0 2px; }
 .chat-msg.is-user .chat-actions { justify-content: flex-end; }
 .chat-copy {
-  display: inline-flex; align-items: center; gap: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid transparent; background: transparent; cursor: pointer;
-  color: var(--muted); font: inherit; font-size: 11px; line-height: 1;
-  padding: 3px 7px; border-radius: 6px; opacity: .55;
+  color: var(--muted); line-height: 1; width: 24px; height: 22px; border-radius: 6px;
+  opacity: .55;
   transition: opacity .15s ease, background .15s ease, color .15s ease, border-color .15s ease;
 }
 .chat-copy:hover { opacity: 1; background: var(--hover-soft); color: var(--text); }
