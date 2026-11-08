@@ -258,6 +258,10 @@ function createCotTimeline(listEl, options) {
     if (branchBtn) {
       if (branchBtn.disabled) return;
       branchBtn.disabled = true;
+      const t0 = Date.now();
+      const ticker = setInterval(() => {
+        toast(`正在创建分支… ${Math.round((Date.now() - t0) / 1000)}s（Claude 可能需 1 分钟）`);
+      }, 2000);
       try {
         toast('正在创建分支…（会用当前工具复制这个会话）');
         const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/fork`, { method: 'POST' });
@@ -271,6 +275,7 @@ function createCotTimeline(listEl, options) {
       } catch (err) {
         toast(`分支失败: ${err.message}`);
       } finally {
+        clearInterval(ticker);
         branchBtn.disabled = false;
       }
       return;
@@ -529,7 +534,7 @@ function createCotTimeline(listEl, options) {
         const isUser = step.kind === 'user';
         const idx = steps.indexOf(step);
         const canCopy = copyTexts.has(idx);
-        const canBranch = canCopy && !isUser && node.tool !== 'claude'; // Claude 的 fork 需先有输入才落盘，暂不提供一键分支
+        const canBranch = canCopy && !isUser; // 只在一整段回答的末尾提供「创建分支」
         // 靠左右对齐区分说话人，不需要头像图标；整段回答的末尾才放复制/分支组件
         return `<div class="chat-msg ${isUser ? 'is-user' : 'is-assistant'}">
           <div class="chat-msg-body">
