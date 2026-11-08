@@ -99,6 +99,7 @@ function renderBoard() {
 
   $('empty').style.display = nodes.length ? 'none' : 'flex';
   $('task-actions').hidden = !currentTask;
+  renderProjectChip();
   $('btn-status').innerHTML = currentTask?.status === 'done' ? (icon('play') + ' 恢复进行中') : (icon('check') + ' 标记完成');
 
   if (!currentTask || !nodes.length) {
@@ -358,4 +359,120 @@ function setupBoardInteractions() {
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeBoardMenu(); });
 }
+
+/* ---------------- 项目现状：不受“支持哪些工具”限制，直接看 git / 磁盘 ----------------
+   只要文件变了（不管是哪个工具改的），这里都能看到；接力/合并时也会扫描进检查点。 */
+function latestNodeCode() {
+  let newest = 0;
+  for (const n of currentTask?.nodes || []) {
+    newest = Math.max(newest, Date.parse(n.lastCodeActivity || '') || 0);
+  }
+  return newest;
+}
+
+/** 磁盘上的改动是否比给定会话（或全部会话）更新（留 2 分钟容差，避免误判本会话刚写的文件） */
+function projectExternalNewer(myCode = '') {
+  const p = currentTask?.project;
+  if (!p?.lastChangeAt) return false;
+  const t = Date.parse(p.lastChangeAt) || 0;
+  const mine = myCode ? (Date.parse(myCode) || 0) : latestNodeCode();
+  return t > mine + 120000;
+}
+
+function renderProjectChip() {
+  const el = $('proj-chip');
+  if (!el) return;
+  const p = currentTask?.project;
+  if (!p) { el.hidden = true; return; }
+  const external = projectExternalNewer();
+  const bits = [];
+  if (p.isGit) bits.push(`${p.branch || 'repo'}${p.head ? `@${p.head}` : ''}`);
+  if (p.dirtyCount) bits.push(`${p.dirtyCount} 个未提交`);
+  else if (external) bits.push('有新的磁盘改动');
+  if (!bits.length) { el.hidden = true; return; }
+  el.hidden = false;
+  el.classList.toggle('warn', external || p.dirtyCount > 0);
+  el.innerHTML = icon('git', 13) + ' ' + escapeHtml(bits.join(' · '));
+  el.title = `项目现状：${bits.join('，')}${p.lastChangeAt ? ` · 最近改动 ${fmtTime(p.lastChangeAt)}` : ''}\n不受工具限制：这里读的是工作区事实。点击看 git / 文件详情`;
+  el.onclick = () => openProjectModal();
+}
+
+function projectHtml(r) {
+  const p = r?.project;
+  if (!p) return '<div class="empty-tree">这个任务没有可扫描的工作目录。</div>';
+  const parts = [];
+  parts.push(`<div class="ctx-row">
+    <span class="ctx-item">${p.isGit ? `Git ${escapeHtml(p.branch || '')}${p.head ? ` @${escapeHtml(p.head)}` : ''}` : '非 git 目录'}</span>
+    <span class="ctx-item">未提交 ${p.dirtyCount || 0} 个文件</span>
+    ${p.lastChangeAt ? `<span class="ctx-item">最近改动 ${fmtTime(p.lastChangeAt)}</span>` : ''}
+  </div>`);
+  if (p.dirty?.length) {
+    parts.push(`<div class="ctx-label">未提交改动</div><div class="proj-list">${p.dirty.slice(0, 25).map((d) => `
+      <div class="proj-row"><span class="proj-code">${escapeHtml(d.code || '')}</span><span class="proj-path">${escapeHtml(d.path || '')}</span></div>`).join('')}
+      ${p.dirtyCount > 25 ? `<div class="proj-row"><span class="proj-path">…另有 ${p.dirtyCount - 25} 个</span></div>` : ''}</div>`);
+  }
+  if (p.diffStat) parts.push(`<div class="ctx-label">改动规模</div><pre class="proj-diff">${escapeHtml(p.diffStat)}</pre>`);
+  if (p.recentCommits?.length) {
+    parts.push(`<div class="ctx-label">最近提交</div><div class="proj-list">${p.recentCommits.map((c) => `
+      <div class="proj-row"><span class="proj-code">${escapeHtml(c.sha || '')}</span><span class="proj-path">${escapeHtml(c.subject || '')}</span></div>`).join('')}</div>`);
+  }
+  if (p.recentFiles?.length) {
+    parts.push(`<div class="ctx-label">最近修改文件</div><div class="proj-list">${p.recentFiles.slice(0, 12).map((f) => `
+      <div class="proj-row"><span class="proj-path">${escapeHtml(f.path || '')}</span><span class="proj-age">${fmtTime(new Date(f.mtime || 0).toISOString())}</span></div>`).join('')}</div>`);
+  }
+  parts.push('<div class="ctx-row" style="margin-top:12px"><button class="btn-ghost small" id="proj-refresh">重新扫描</button></div>');
+  return parts.join('');
+}
+
+async function openProjectModal() {
+  if (!currentTask) return;
+  openModal({
+    title: '项目现状 · 与具体工具无关',
+    submitLabel: '',
+    bodyHtml: '<div id="proj-body" class="empty-tree">扫描中…</div>',
+  });
+  const load = async (force) => {
+    const body = $('proj-body');
+    if (!body) return;
+    try {
+      const r = await api(`/api/tasks/${currentTask.id}/project-state${force ? '?refresh=1' : ''}`);
+      if (r.project) {
+        currentTask.project = {
+          cwd: r.project.cwd,
+          isGit: r.project.isGit,
+          branch: r.project.branch,
+          head: r.project.head,
+          headAt: r.project.headAt,
+          dirtyCount: r.project.dirtyCount,
+          lastChangeAt: r.project.lastChangeAt,
+        };
+        renderProjectChip();
+      }
+      body.innerHTML = projectHtml(r);
+      $('proj-refresh')?.addEventListener('click', () => load(true));
+    } catch (err) {
+      body.innerHTML = `<div class="empty-tree">扫描失败：${escapeHtml(err.message)}</div>`;
+    }
+  };
+  load(false);
+}
+
+// 每 30 秒轻量刷新一次项目现状（不刷新整个任务，避免开销）
+setInterval(async () => {
+  if (!currentTask) return;
+  try {
+    const r = await api(`/api/tasks/${currentTask.id}/project-state`);
+    if (!r.project) return;
+    currentTask.project = {
+      cwd: r.project.cwd,
+      isGit: r.project.isGit,
+      branch: r.project.branch,
+      head: r.project.head,
+      headAt: r.project.headAt,
+      dirtyCount: r.project.dirtyCount,
+      lastChangeAt: r.project.lastChangeAt,
+    };
+    renderProjectChip();
+  } catch { /* 服务不可达时忽略 */ }
+}, 30000);
 

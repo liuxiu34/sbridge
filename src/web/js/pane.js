@@ -124,12 +124,16 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       const anyNewer = nodes
         .filter((n) => n.id !== node.id && n.lastCodeActivity && String(n.lastCodeActivity) > myCode)
         .sort((a, b) => String(b.lastCodeActivity).localeCompare(String(a.lastCodeActivity)));
-      if (!anyNewer.length) { forkAlertEl.hidden = true; return; }
-      const top = anyNewer[0];
+      // 磁盘/ git 上的改动是否比本会话新（可能来自我们不解析的工具）
+      const externalNewer = typeof projectExternalNewer === 'function' && projectExternalNewer(myCode);
+      if (!anyNewer.length && !externalNewer) { forkAlertEl.hidden = true; return; }
+      const top = anyNewer[0] || null;
       forkAlertEl.hidden = false;
       const chainNote = chainNewer.length
         ? `接力链上有更新的代码改动 ${toolLabel(chainNewer[0].tool)}「${escapeHtml(truncate(chainNewer[0].title || '(会话)', 28))}」· ${fmtTime(chainNewer[0].lastCodeActivity)}${chainNewer.length > 1 ? `（链上另有 ${chainNewer.length - 1} 个更新会话）` : ''}`
-        : `其他会话有更新的代码改动（可能来自不同功能方向）：${toolLabel(top.tool)}「${escapeHtml(truncate(top.title || '(会话)', 28))}」· ${fmtTime(top.lastCodeActivity)}${anyNewer.length > 1 ? `（另有 ${anyNewer.length - 1} 个更新会话）` : ''}`;
+        : anyNewer.length
+          ? `其他会话有更新的代码改动（可能来自不同功能方向）：${toolLabel(top.tool)}「${escapeHtml(truncate(top.title || '(会话)', 28))}」· ${fmtTime(top.lastCodeActivity)}${anyNewer.length > 1 ? `（另有 ${anyNewer.length - 1} 个更新会话）` : ''}`
+          : `项目里有比本会话更新的磁盘改动（可能来自其他工具）：${fmtTime(currentTask?.project?.lastChangeAt)}${currentTask?.project?.dirtyCount ? ` · ${currentTask.project.dirtyCount} 个未提交文件` : ''}。这里只看工作区事实，不受工具限制`;
       forkAlertEl.innerHTML = `<span class="fork-warn">${icon('history', 13)} 本会话可能未掌握项目最新进度：${chainNote}</span>
         ${chainNewer.length ? `<button type="button" class="btn-primary small" data-role="jumplatest">${icon('handoff', 12)} 跳转到最新会话</button>` : ''}
         <button type="button" class="btn-ghost small" data-role="mergeckpt" title="把本任务所有会话的最新进展合并成一份摘要，并自动扫描项目现状（git 分支/提交/未提交改动/最近修改文件），生成一个掌握全部进度的新会话继续开发；原会话保留不动">${icon('context', 12)} 合并全部进度并继续</button>

@@ -18,7 +18,7 @@ import * as termmod from './term.mjs';
 import { renderTranscript } from './transcript.mjs';
 import { ensureSubagentProtocols } from './subagent-protocol.mjs';
 import { maybeCreateWorktree } from './worktree.mjs';
-import { scanProjectTruth } from './project-scan.mjs';
+import { scanProjectState, scanProjectTruth, renderProjectTruth } from './project-scan.mjs';
 import { expandPath, samePath, truncate, estimateTokens } from './util.mjs';
 import { IS_SEA, ROOT, WEB_DIR, DATA_DIR } from './paths.mjs';
 
@@ -143,29 +143,47 @@ function computeCodeActivity(node) {
 function taskDetail(db, taskId) {
   const task = db.tasks.find((t) => t.id === taskId);
   if (!task) return null;
+  const nodes = task.nodes.map((n) => {
+    let lastActivity = null;
+    // 会话文件的 mtime = 最后一次活动时间（包含闲聊，仅作兜底展示）
+    try {
+      if (n.file && !n.file.startsWith('sqlite:') && fs.existsSync(n.file)) {
+        lastActivity = fs.statSync(n.file).mtime.toISOString();
+      }
+    } catch { /* 读不到就用 createdAt */ }
+    const code = computeCodeActivity(n);
+    return {
+      ...n,
+      lastActivity: lastActivity || n.createdAt || null,
+      // 本会话最后一次「真正改了东西」的时间 + 涉及的文件：进度判断以它为准
+      lastCodeActivity: code?.ts || null,
+      codeFiles: code?.files || [],
+      // 上下文用量改为打开面板时按需查询（GET .../nodes/:id/usage）：
+      // 打开大任务时不再为几十个会话逐个读文件尾巴，首屏更快
+      // sqlite: 前缀 = 正文在 Codex 本地库，视为存在
+      exists: n.file.startsWith('sqlite:') || fs.existsSync(n.file),
+    };
+  });
+
+  // 项目现状（与工具无关）：优先取「最近有代码活动」的会话目录作为主工作区
+  const primary = [...nodes]
+    .filter((n) => n.cwd)
+    .sort((a, b) => String(b.lastCodeActivity || b.lastActivity || '').localeCompare(String(a.lastCodeActivity || a.lastActivity || '')))[0];
+  const st = primary ? scanProjectState(primary.cwd) : null;
+
   return {
     ...task,
-    nodes: task.nodes.map((n) => {
-      let lastActivity = null;
-      // 会话文件的 mtime = 最后一次活动时间（包含闲聊，仅作兜底展示）
-      try {
-        if (n.file && !n.file.startsWith('sqlite:') && fs.existsSync(n.file)) {
-          lastActivity = fs.statSync(n.file).mtime.toISOString();
-        }
-      } catch { /* 读不到就用 createdAt */ }
-      const code = computeCodeActivity(n);
-      return {
-        ...n,
-        lastActivity: lastActivity || n.createdAt || null,
-        // 本会话最后一次「真正改了东西」的时间 + 涉及的文件：进度判断以它为准
-        lastCodeActivity: code?.ts || null,
-        codeFiles: code?.files || [],
-        // 上下文用量改为打开面板时按需查询（GET .../nodes/:id/usage）：
-        // 打开大任务时不再为几十个会话逐个读文件尾巴，首屏更快
-        // sqlite: 前缀 = 正文在 Codex 本地库，视为存在
-        exists: n.file.startsWith('sqlite:') || fs.existsSync(n.file),
-      };
-    }),
+    nodes,
+    // 轻量字段：给界面提示「项目有未提交改动 / 有比会话更新的磁盘改动」
+    project: st ? {
+      cwd: st.cwd,
+      isGit: st.isGit,
+      branch: st.branch,
+      head: st.head,
+      headAt: st.headAt,
+      dirtyCount: st.dirtyCount,
+      lastChangeAt: st.lastChangeAt,
+    } : null,
   };
 }
 
@@ -802,6 +820,18 @@ if (req.method === 'GET' && resource === 'stream') {
         .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
         .slice(0, 8);
       return json(res, 200, { fix, sessions: unique });
+    }
+
+    /* 项目现状详情（结构化 + 可直接塞检查点的文本）：git/磁盘事实，与具体工具无关 */
+    if (req.method === 'GET' && sub === 'project-state') {
+      const detail = taskDetail(db, id);
+      if (!detail) return json(res, 404, { error: '任务不存在' });
+      const cwd = url.searchParams.get('cwd')
+        || detail.nodes.find((n) => n.cwd)?.cwd
+        || '';
+      if (!cwd || !fs.existsSync(cwd)) return json(res, 200, { project: null, text: null });
+      const state = scanProjectState(cwd, { force: url.searchParams.get('refresh') === '1' });
+      return json(res, 200, { project: state, text: renderProjectTruth(state, cwd) });
     }
 
     /* 上下文用量（单节点，轻量）：读工具自己的用量记录 + 该节点终端里的状态栏 */
