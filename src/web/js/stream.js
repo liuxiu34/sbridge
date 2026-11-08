@@ -249,6 +249,34 @@ function createCotTimeline(listEl, options) {
   const uid = `cot-${Math.random().toString(36).slice(2, 9)}`;
   const steps = [];
   const byCall = new Map();
+
+  /* 消息下方「复制」：按索引取 step.text 原文（复制 Markdown 原文，不是渲染后的 HTML）。
+     listEl 不会重建，事件委托挂一次即可。 */
+  listEl.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-copy]');
+    if (!btn) return;
+    const step = steps[Number(btn.dataset.copy)];
+    if (!step?.text) return;
+    try {
+      await navigator.clipboard.writeText(step.text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = step.text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch { /* ignore */ }
+      ta.remove();
+    }
+    const label = btn.querySelector('span');
+    btn.classList.add('copied');
+    if (label) label.textContent = '已复制';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      if (label) label.textContent = '复制';
+    }, 1200);
+  });
   const openDetails = new Set();
   let connected = false;
   let gone = false;
@@ -447,9 +475,14 @@ function createCotTimeline(listEl, options) {
       if (block.type === 'message') {
         const step = block.step;
         const isUser = step.kind === 'user';
-        // 靠左右对齐区分说话人，不需要头像图标
+        // 靠左右对齐区分说话人，不需要头像图标；气泡下方留一个透明「复制」组件
         return `<div class="chat-msg ${isUser ? 'is-user' : 'is-assistant'}">
-          <div class="chat-bubble">${step.bodyHtml || `<div class="sev-text">${renderMessageHtml(step.text || '', isUser ? 3000 : 6000)}</div>`}</div>
+          <div class="chat-msg-body">
+            <div class="chat-bubble">${step.bodyHtml || `<div class="sev-text">${renderMessageHtml(step.text || '', isUser ? 3000 : 6000)}</div>`}</div>
+            <div class="chat-actions">
+              <button type="button" class="chat-copy" data-copy="${steps.indexOf(step)}" title="复制这条消息">${icon('copy', 12)}<span>复制</span></button>
+            </div>
+          </div>
         </div>`;
       }
       return toolsBlockHtml(block);

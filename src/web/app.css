@@ -673,8 +673,24 @@ html, body {
 .chat-stream { max-width: 1120px; width: 100%; margin: 0 auto; padding: 14px 6px 10px; }
 .chat-thread { display: flex; flex-direction: column; }
 .chat-msg { display: flex; margin: 0 0 10px; align-items: flex-start; }
-.chat-msg.is-user { justify-content: flex-end; }
+.chat-msg.is-user { justify-content: flex-end; margin-top: 6px; } /* 上一段 AI 回复与下一个问题之间再留一点空 */
+.chat-msg-body { display: flex; flex-direction: column; min-width: 0; }
+.chat-msg.is-user .chat-msg-body { max-width: min(900px, 90%); align-items: flex-end; }
+.chat-msg.is-assistant .chat-msg-body { flex: 1 1 auto; width: 100%; }
+/* 气泡下方透明「复制」组件：既做复制入口，也承担消息之间的留白 */
+.chat-actions { display: flex; margin-top: 2px; padding: 0 2px; }
+.chat-msg.is-user .chat-actions { justify-content: flex-end; }
+.chat-copy {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid transparent; background: transparent; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: 11px; line-height: 1;
+  padding: 3px 7px; border-radius: 6px; opacity: .55;
+  transition: opacity .15s ease, background .15s ease, color .15s ease, border-color .15s ease;
+}
+.chat-copy:hover { opacity: 1; background: var(--hover-soft); color: var(--text); }
+.chat-copy.copied { opacity: 1; color: var(--codex); background: var(--codex-soft); border-color: var(--codex-soft); }
 .chat-bubble { min-width: 0; max-width: min(900px, 90%); font-size: 15px; line-height: 1.7; }
+.chat-msg.is-user .chat-bubble { max-width: 100%; }
 .chat-msg.is-user .chat-bubble {
   background: var(--accent-soft); border: 1px solid var(--line-strong);
   border-radius: 14px 14px 4px 14px; padding: 9px 13px;
