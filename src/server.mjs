@@ -160,9 +160,8 @@ function taskDetail(db, taskId) {
         // 本会话最后一次「真正改了东西」的时间 + 涉及的文件：进度判断以它为准
         lastCodeActivity: code?.ts || null,
         codeFiles: code?.files || [],
-        // 上下文用量：读工具自己的记录（codex token_count / claude usage / pi 状态栏），
-        // 读不到才由前端退回估算
-        ctx: computeContextUsage(n, termmod.tailTextForNode(n.id)),
+        // 上下文用量改为打开面板时按需查询（GET .../nodes/:id/usage）：
+        // 打开大任务时不再为几十个会话逐个读文件尾巴，首屏更快
         // sqlite: 前缀 = 正文在 Codex 本地库，视为存在
         exists: n.file.startsWith('sqlite:') || fs.existsSync(n.file),
       };
@@ -1040,18 +1039,22 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`sbridge 看板已启动: http://localhost:${PORT}`);
+  const bootMs = Math.round(process.uptime() * 1000);
+  console.log(`sbridge 看板已启动: http://localhost:${PORT}（进程启动 ${bootMs}ms）`);
   console.log(`数据目录: ${DATA_DIR}`);
   console.log('关闭此窗口即退出服务');
   // 双击便携 exe 启动时自动打开浏览器；桌面版（Electron 壳负责窗口）与开发模式不弹
   if (IS_SEA && !process.env.SBRIDGE_NO_BROWSER) openBrowser();
-  // 后台自动捕获：监听各工具会话目录，文件变化即增量入库
-  startAutoCapture({
-    getBoardTasks: () => store.load().tasks,
-    findCtxTaskId: (boardTaskId) => ctxdb.findTaskByBoardId(boardTaskId)?.id || null,
-    capture: (ctxTaskId, sessions) => captureTask(ctxTaskId, { sessions }),
-    roots: Object.values(TOOLS).map((t) => t.sessionsRoot?.()).filter(Boolean),
-  });
-  // 子代理修复协议随软件分发：装了 sbridge 的机器，Codex/Pi 自动获得子代理修复能力（幂等）
-  ensureSubagentProtocols();
+  // 后台任务延后一拍：先让首屏 HTML/JS 请求走完，再做目录监听与协议文件同步
+  setTimeout(() => {
+    // 后台自动捕获：监听各工具会话目录，文件变化即增量入库
+    startAutoCapture({
+      getBoardTasks: () => store.load().tasks,
+      findCtxTaskId: (boardTaskId) => ctxdb.findTaskByBoardId(boardTaskId)?.id || null,
+      capture: (ctxTaskId, sessions) => captureTask(ctxTaskId, { sessions }),
+      roots: Object.values(TOOLS).map((t) => t.sessionsRoot?.()).filter(Boolean),
+    });
+    // 子代理修复协议随软件分发：装了 sbridge 的机器，Codex/Pi 自动获得子代理修复能力（幂等）
+    ensureSubagentProtocols();
+  }, 200);
 });
