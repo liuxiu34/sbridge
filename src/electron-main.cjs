@@ -157,7 +157,7 @@ function createWindow() {
     height: 900,
     minWidth: 980,
     minHeight: 640,
-    backgroundColor: '#eef2f0',
+    backgroundColor: '#f4f7f5',
     title: 'sbridge · 会话接力工作台',
     icon: path.join(__dirname, 'icon.ico'),
     autoHideMenuBar: true,
