@@ -100,9 +100,19 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-    <script src="/vendor/xterm.js"></script>
-    <script src="/vendor/addon-canvas.js"></script>
-    <script src="/vendor/addon-fit.js"></script>
-<script src="/app.js"></script>
+    <!-- 前端模块按依赖顺序加载（普通脚本，顶层声明在全局词法环境共享）；
+         xterm 由 term.js 在首次打开终端时按需加载，首屏不解析 -->
+    <script src="/js/core.js"></script>
+    <script src="/js/term.js"></script>
+    <script src="/js/layout.js"></script>
+    <script src="/js/stream.js"></script>
+    <script src="/js/pane.js"></script>
+    <script src="/js/sidebar.js"></script>
+    <script src="/js/board.js"></script>
+    <script src="/js/tasks.js"></script>
+    <script src="/js/modals.js"></script>
+    <script src="/js/handoff.js"></script>
+    <script src="/js/actions.js"></script>
+    <script src="/app.js"></script>
 </body>
 </html>

@@ -7,12 +7,22 @@ const DATA_FILE = path.join(DATA_DIR, 'board.json');
 
 const EMPTY = { projects: [], tasks: [] };
 
+/* 按 (mtime,size) 缓存解析结果：handleApi 每个请求都会 load()，
+   看板数据大时反复 JSON.parse 会拖慢首屏和每个 API。save() 后立刻失效。 */
+let cache = null;
+
 export function load() {
   try {
+    const st = fs.statSync(DATA_FILE);
+    const key = `${st.mtimeMs}|${st.size}`;
+    if (cache && cache.key === key) return cache.db;
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
     const db = JSON.parse(raw);
-    return { projects: db.projects || [], tasks: db.tasks || [] };
+    const val = { projects: db.projects || [], tasks: db.tasks || [] };
+    cache = { key, db: val };
+    return val;
   } catch {
+    cache = null;
     return structuredClone(EMPTY);
   }
 }
@@ -22,6 +32,7 @@ export function save(db) {
   const tmp = `${DATA_FILE}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2), 'utf8');
   fs.renameSync(tmp, DATA_FILE);
+  cache = null;
 }
 
 export const uid = () => crypto.randomBytes(6).toString('hex');

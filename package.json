@@ -8,7 +8,7 @@
   "scripts": {
     "app": "node src/server.mjs",
     "electron": "electron src/electron-main.cjs",
-    "dist": "electron-builder --win nsis",
+    "dist": "electron-builder --win nsis --publish never",
     "build:exe": "esbuild src/server.mjs --bundle --platform=node --format=cjs --outfile=dist/app.cjs --log-level=error && node --experimental-sea-config sea-config.json && node -e \"const fs=require('fs'),path=require('path');fs.copyFileSync(path.join(path.dirname(process.execPath),'node.exe'),'dist/sbridge.exe');console.log('copied node.exe')\" && node -e \"const fs=require('fs');fs.rmSync('dist/node_modules',{recursive:true,force:true});fs.cpSync('node_modules/node-pty','dist/node_modules/node-pty',{recursive:true});fs.cpSync('node_modules/ws','dist/node_modules/ws',{recursive:true});console.log('copied pty deps(含 package.json)')\" && npx postject dist/sbridge.exe NODE_SEA_BLOB dist/sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2"
   },
   "engines": {
