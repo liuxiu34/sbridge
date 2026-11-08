@@ -740,6 +740,7 @@ if (req.method === 'GET' && resource === 'stream') {
         summary: { messageCount: 2, turnCount: 1, tokens: row.injected_tokens, firstUser: truncate(row.rendered, 300), lastAssistant: result.ack, files: [] },
         parentNodeId: body.nodeId || null,
         checkpointVersion: row.version,
+        edgeKind: 'handoff',
         resumeCommand: result.resumeCommand,
         registration: result.registration || null,
         termId: result.termId || null,
@@ -816,6 +817,7 @@ if (req.method === 'GET' && resource === 'stream') {
           summary: { messageCount: 2, turnCount: 1, tokens: injectedTokens, firstUser: truncate(finalRendered, 300), lastAssistant: result.ack, files: [] },
           parentNodeId: body.nodeId || null,
           checkpointVersion: ckpt.version,
+          edgeKind: 'handoff',
           llmUsed: ckpt.llmUsed,
           resumeCommand: result.resumeCommand,
           registration: result.registration || null,
@@ -1176,6 +1178,7 @@ if (req.method === 'GET' && resource === 'stream') {
           const newNode = store.addNode(freshDb, id, makeNode(tool.name, conv, {
             parentNodeId: node.id,
             resumeCommand: `claude --resume ${conv.id}`,
+            edgeKind: 'branch',
           }));
           const term = termmod.spawnTerm({ tool: 'claude', cwd, command: `claude --resume ${conv.id}`, label: `${TOOL_LABELS.claude} · 分支` });
           termmod.setTermNode(term.id, newNode.id);
@@ -1213,6 +1216,7 @@ if (req.method === 'GET' && resource === 'stream') {
         const newNode = store.addNode(freshDb, id, makeNode(tool.name, conv, {
           parentNodeId: node.id,
           resumeCommand: `${resumeCommand} ${conv.id}`,
+          edgeKind: 'branch',
         }));
         termmod.setTermNode(term.id, newNode.id);
         return json(res, 200, { ok: true, node: newNode, termId: term.id });
@@ -1291,6 +1295,7 @@ if (req.method === 'GET' && resource === 'stream') {
         const newConv = to.read(result.file);
         const newNode = store.addNode(db, id, makeNode(to.name, newConv, {
           parentNodeId: node.id,
+          edgeKind: 'handoff',
           trimmedCount: trimmed.droppedCount,
           resumeCommand: result.resumeCommand,
           registration: result.registration || null,

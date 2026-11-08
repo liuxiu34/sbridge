@@ -338,6 +338,7 @@ html, body {
 .chip.pi { color: var(--pi); background: var(--pi-soft); }
 .chip.claude { color: var(--claude); background: var(--claude-soft); }
 .chip.branch { color: var(--warn); background: var(--warn-soft); }
+.chip.handoff { color: var(--accent); background: var(--accent-soft); }
 
 /* 内嵌终端 */
 .term-head { display: flex; align-items: center; justify-content: space-between; color: var(--text); }
@@ -1439,6 +1440,7 @@ svg.ico { flex: none; vertical-align: -2px; }
 .chip.pi { background: var(--pi-soft); }
 .chip.claude { background: var(--claude-soft); }
 .chip.branch { background: var(--warn-soft); }
+.chip.handoff { background: var(--accent-soft); }
 
 /* 弹窗与菜单 */
 .modal-mask { background: rgba(24, 22, 20, .3); }
