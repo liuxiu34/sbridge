@@ -249,19 +249,21 @@ function createCotTimeline(listEl, options) {
   const uid = `cot-${Math.random().toString(36).slice(2, 9)}`;
   const steps = [];
   const byCall = new Map();
+  const copyTexts = new Map(); // step 下标 -> 该复制按钮对应的文本（整段回答 / 用户原文）
 
   /* 消息下方「复制」：按索引取 step.text 原文（复制 Markdown 原文，不是渲染后的 HTML）。
      listEl 不会重建，事件委托挂一次即可。 */
   listEl.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-copy]');
     if (!btn) return;
-    const step = steps[Number(btn.dataset.copy)];
-    if (!step?.text) return;
+    const idx = Number(btn.dataset.copy);
+    const text = copyTexts.get(idx) ?? steps[idx]?.text ?? '';
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(step.text);
+      await navigator.clipboard.writeText(text);
     } catch {
       const ta = document.createElement('textarea');
-      ta.value = step.text;
+      ta.value = text;
       ta.style.position = 'fixed';
       ta.style.opacity = '0';
       document.body.appendChild(ta);
@@ -463,6 +465,35 @@ function createCotTimeline(listEl, options) {
     const active = activeStep();
     const work = workingState(active);
 
+    /* 复制粒度 = 一整段回答：一个用户消息到下一个用户消息之间的全部助手正文
+       （工具调用不参与复制）。只有该段最后一轮助手消息带复制按钮；
+       用户消息复制自己的原文。 */
+    copyTexts.clear();
+    {
+      let group = [];
+      let lastAssistant = -1;
+      const finalize = () => {
+        if (lastAssistant >= 0) {
+          const merged = group.join('\n\n').trim();
+          if (merged) copyTexts.set(lastAssistant, merged);
+        }
+        lastAssistant = -1;
+        group = [];
+      };
+      for (let i = 0; i < steps.length; i++) {
+        const s = steps[i];
+        if (s.phase !== 'message') continue; // 工具步骤不算正文
+        if (s.kind === 'user') {
+          finalize();
+          copyTexts.set(i, String(s.text || ''));
+        } else {
+          group.push(String(s.text || '').trim());
+          lastAssistant = i;
+        }
+      }
+      finalize();
+    }
+
     // 消息直出气泡；连续工具步骤聚组：执行中展开、结束后收成一行摘要
     const bodyHtml = buildBlocks().map((block) => {
       if (block.type === 'command') {
@@ -475,13 +506,15 @@ function createCotTimeline(listEl, options) {
       if (block.type === 'message') {
         const step = block.step;
         const isUser = step.kind === 'user';
-        // 靠左右对齐区分说话人，不需要头像图标；气泡下方留一个透明「复制」组件
+        const idx = steps.indexOf(step);
+        const canCopy = copyTexts.has(idx);
+        // 靠左右对齐区分说话人，不需要头像图标；整段回答的末尾才放一个复制组件
         return `<div class="chat-msg ${isUser ? 'is-user' : 'is-assistant'}">
           <div class="chat-msg-body">
             <div class="chat-bubble">${step.bodyHtml || `<div class="sev-text">${renderMessageHtml(step.text || '', isUser ? 3000 : 6000)}</div>`}</div>
-            <div class="chat-actions">
-              <button type="button" class="chat-copy" data-copy="${steps.indexOf(step)}" title="复制这条消息">${icon('copy', 12)}</button>
-            </div>
+            ${canCopy ? `<div class="chat-actions">
+              <button type="button" class="chat-copy" data-copy="${idx}" title="复制整段内容">${icon('copy', 12)}</button>
+            </div>` : ''}
           </div>
         </div>`;
       }
