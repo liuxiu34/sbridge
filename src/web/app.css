@@ -1288,13 +1288,15 @@ svg.ico { flex: none; vertical-align: -2px; }
 
 /* 全局搜索弹窗 */
 .search-box { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
-.search-box input {
+/* 只作用于搜索文本框：复选框不能继承 width:100% / 内边距，否则会被拉满整行 */
+.search-box input:not([type="checkbox"]) {
   width: 100%; padding: 9px 11px; border: 1px solid var(--line-strong);
   border-radius: 9px; font: inherit; font-size: 13px;
   background: var(--panel); color: var(--text);
 }
-.search-box input:focus { outline: none; border-color: var(--accent); }
-.search-deep { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.search-box input:not([type="checkbox"]):focus { outline: none; border-color: var(--accent); }
+.search-deep { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.search-deep input[type="checkbox"] { flex: none; margin: 2px 0 0; width: auto; }
 .search-results { display: flex; flex-direction: column; gap: 6px; max-height: 52vh; overflow-y: auto; }
 .search-row {
   display: flex; gap: 10px; align-items: flex-start; text-align: left;
