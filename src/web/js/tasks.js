@@ -35,6 +35,9 @@ async function openTask(taskId) {
 async function refreshTask() {
   if (!currentTask) return;
   currentTask = await api(`/api/tasks/${currentTask.id}`);
+  // 会话集合变了（新建分支/接入新会话）→ 每个已打开面板的「跳转到最新会话」提示条重算一次，
+  // 否则它只在面板首次创建时算过，会一直停在旧结论上。
+  for (const h of paneHandles.values()) { try { h.refreshForkAlert?.(); } catch { /* ignore */ } }
   await loadState();
   renderBoard();
 }

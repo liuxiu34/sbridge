@@ -98,10 +98,12 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       if (!forkAlertEl) return;
       if (!currentTask) { forkAlertEl.hidden = true; return; }
       // 跨会话比「谁更新」仍只看实质代码活动（闲聊不参与）；
-      // 链上后代用 lastCodeActivity || lastActivity || createdAt 兜底——接力生成的新会话
-      // 可能还没改代码，但它天然是本会话的后继，应该允许「跳过去」。
+      // 链上后代取三个时间戳里最新的那个：fork/接力生成的新会话会把父会话的历史一起带过来，
+      // 解析出的 lastCodeActivity 可能与父会话完全相同（甚至更早），只看它会把新会话误判成「没更新」。
       const nodes = currentTask.nodes || [];
-      const nodeKey = (n) => String(n.lastCodeActivity || n.lastActivity || n.createdAt || '');
+      const nodeKey = (n) => [n.lastCodeActivity, n.lastActivity, n.createdAt]
+        .map((v) => String(v || ''))
+        .sort((a, b) => b.localeCompare(a))[0] || '';
       const myCode = node.lastCodeActivity || '';
       const myKey = nodeKey(node);
       // 链内：只看「本会话的后代」（接力链上有继承关系的新会话才谈得上「跳过去」）
@@ -132,6 +134,9 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       const externalNewer = typeof projectExternalNewer === 'function' && projectExternalNewer(myCode);
       if (!anyNewer.length && !externalNewer && !chainNewer.length) { forkAlertEl.hidden = true; return; }
       const top = anyNewer[0] || null;
+      // 跳转目标：接力链上更新的后代优先；没有同链后代时退到「全任务最新会话」。
+      // 跨链会话只跳过去查看（不继承上下文），按钮 title 里写清楚。
+      const jumpTarget = chainNewer[0] || top;
       forkAlertEl.hidden = false;
       const chainNote = chainNewer.length
         ? `接力链上有更新的会话 ${toolLabel(chainNewer[0].tool)}「${escapeHtml(truncate(chainNewer[0].title || '(会话)', 28))}」· ${fmtTime(nodeKey(chainNewer[0]) || chainNewer[0].createdAt)}${chainNewer.length > 1 ? `（链上另有 ${chainNewer.length - 1} 个更新会话）` : ''}`
@@ -139,11 +144,11 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
           ? `其他会话有更新的代码改动（可能来自不同功能方向）：${toolLabel(top.tool)}「${escapeHtml(truncate(top.title || '(会话)', 28))}」· ${fmtTime(top.lastCodeActivity)}${anyNewer.length > 1 ? `（另有 ${anyNewer.length - 1} 个更新会话）` : ''}`
           : `项目里有比本会话更新的磁盘改动（可能来自其他工具）：${fmtTime(currentTask?.project?.lastChangeAt)}${currentTask?.project?.dirtyCount ? ` · ${currentTask.project.dirtyCount} 个未提交文件` : ''}。这里只看工作区事实，不受工具限制`;
       forkAlertEl.innerHTML = `<span class="fork-warn">${icon('history', 13)} 本会话可能未掌握项目最新进度：${chainNote}</span>
-        ${chainNewer.length ? `<button type="button" class="btn-primary small" data-role="jumplatest">${icon('handoff', 12)} 跳转到最新会话</button>` : ''}
+        ${jumpTarget ? `<button type="button" class="btn-primary small" data-role="jumplatest" title="${chainNewer.length ? '跳到接力链上更新的会话（完整继承历史）' : '跳到全任务最新的会话（跨链只跳转查看，不继承上下文）'}">${icon('handoff', 12)} 跳转到最新会话</button>` : ''}
         <button type="button" class="pbtn" data-role="forkclose" title="关闭提示">×</button>`;
       forkAlertEl.querySelector('[data-role="jumplatest"]')?.addEventListener('click', () => {
         forkAlertEl.hidden = true;
-        openSessionTab(chainNewer[0].id); // 跳链上最新的；若它之后还有更新，它自己的提醒条会继续指路
+        openSessionTab(jumpTarget.id); // 跳链上最新的；若它之后还有更新，它自己的提醒条会继续指路
       });
       forkAlertEl.querySelector('[data-role="forkclose"]').onclick = () => { forkAlertEl.hidden = true; };
     } catch { /* ignore */ }
@@ -707,6 +712,8 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       if (rawTerm) { try { rawTerm.dispose(); } catch { /* ignore */ } rawTerm = null; }
     },
     refit() { if (!showingStream) rawTerm?.refit(); },
+    // 任务数据刷新后（新建了分支/接入了新会话）立刻重算「跳转到最新会话」提示条
+    refreshForkAlert: renderForkAlert,
     node,
   };
 }
