@@ -884,19 +884,53 @@ if (req.method === 'GET' && resource === 'stream') {
       if (!cwd || !fs.existsSync(cwd)) return json(res, 400, { error: `工作目录不存在: ${cwd}` });
       const sid = String(node.sessionId || '').trim();
       if (!sid) return json(res, 400, { error: '这个会话没有 session id，无法分支' });
-      // Claude Code 的 --fork-session 只有在第一次输入后才落盘新会话文件，无法马上绑定节点
+      let before = new Set();
+      try { before = new Set((tool.list({ limit: 200 }) || []).map((it) => String(it.id))); } catch { /* ignore */ }
+
+      /* Claude 的 fork 要等第一条输入才落盘：先无头注入一条中性消息，再建节点 + 开交互终端 */
       if (node.tool === 'claude') {
-        return json(res, 400, { error: 'Claude Code 的分支需要先发一条消息才生成新会话，暂不支持一键分支；可在终端执行 claude --resume ' + sid + ' --fork-session' });
+        const prompt = 'Continue the previous work.';
+        const exitCode = await new Promise((resolve) => {
+          let child;
+          try {
+            child = spawn(`claude --resume ${sid} --fork-session -p "${prompt}"`, [], {
+              cwd, shell: true, windowsHide: true, stdio: 'ignore',
+              env: { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' },
+            });
+          } catch { resolve(-1); return; }
+          const timer = setTimeout(() => { try { child.kill(); } catch { /* ignore */ } resolve(-1); }, 120000);
+          child.on('exit', (c) => { clearTimeout(timer); resolve(c ?? 0); });
+          child.on('error', () => { clearTimeout(timer); resolve(-1); });
+        });
+        let created = null;
+        for (let i = 0; i < 40 && !created; i++) {
+          try {
+            created = (tool.list({ limit: 200 }) || [])
+              .find((it) => !before.has(String(it.id)) && normDir(it.cwd) === normDir(cwd)) || null;
+          } catch { /* ignore */ }
+          if (!created) await new Promise((r) => setTimeout(r, 250));
+        }
+        if (!created) {
+          return json(res, 500, { error: `Claude 分支创建失败（无头返回 ${exitCode}），请重试或改用终端命令` });
+        }
+        try {
+          const conv = tool.read(created.file);
+          const newNode = store.addNode(db, id, makeNode(tool.name, conv, {
+            parentNodeId: node.id,
+            resumeCommand: `claude --resume ${conv.id}`,
+          }));
+          const term = termmod.spawnTerm({ tool: 'claude', cwd, command: `claude --resume ${conv.id}`, label: `${TOOL_LABELS.claude} · 分支` });
+          termmod.setTermNode(term.id, newNode.id);
+          return json(res, 200, { ok: true, node: newNode, termId: term.id });
+        } catch (err) {
+          return json(res, 500, { error: `读取分支会话失败: ${err.message}` });
+        }
       }
 
       let command = '';
       let resumeCommand = '';
       if (node.tool === 'codex') { command = `codex fork ${sid}`; resumeCommand = 'codex resume'; }
-      else if (node.tool === 'claude') { command = `claude --resume ${sid} --fork-session`; resumeCommand = 'claude --resume'; }
       else { command = `pi --fork ${sid}`; resumeCommand = 'pi --session'; }
-
-      let before = new Set();
-      try { before = new Set((tool.list({ limit: 200 }) || []).map((it) => String(it.id))); } catch { /* ignore */ }
 
       const term = termmod.spawnTerm({ tool: node.tool, cwd, command, label: `${TOOL_LABELS[node.tool] || node.tool} · 分支` });
 
