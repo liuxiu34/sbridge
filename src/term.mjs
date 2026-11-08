@@ -43,6 +43,12 @@ export function getTerm(id) {
   return terms.get(id) || null;
 }
 
+/** 分支/新会话检测到节点后，把 PTY 归属补绑到该节点（前端才能按节点找到它） */
+export function setTermNode(id, nodeId) {
+  const t = terms.get(id);
+  if (t) t.nodeId = nodeId || null;
+}
+
 /** 某会话节点终端最近输出的原文（含控制序列，调用方自行清洗）：
  *  用于读取 CLI 自己打印的状态栏（如 pi 的上下文百分比），比在应用里估算准。 */
 export function tailTextForNode(nodeId, maxChars = 16000) {

@@ -771,7 +771,7 @@ if (req.method === 'GET' && resource === 'stream') {
       return json(res, 200, { node: null });
     }
 
-    if (req.method === 'POST' && sub === 'nodes') {
+    if (req.method === 'POST' && sub === 'nodes' && !subId) {
       const body = await readBody(req);
       const tool = TOOLS[body.tool];
       if (!tool) return json(res, 400, { error: '未知工具' });
@@ -871,6 +871,60 @@ if (req.method === 'GET' && resource === 'stream') {
       if (!cwd || !fs.existsSync(cwd)) return json(res, 200, { project: null, text: null });
       const state = scanProjectState(cwd, { force: url.searchParams.get('refresh') === '1' });
       return json(res, 200, { project: state, text: renderProjectTruth(state, cwd) });
+    }
+
+    /* 会话分支：用对应 CLI 的原生 fork 复制当前会话（保留完整历史），新建节点挂在父节点下 */
+    if (req.method === 'POST' && sub === 'nodes' && subId && extra === 'fork') {
+      const task = db.tasks.find((t) => t.id === id);
+      const node = task?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      const tool = TOOLS[node.tool];
+      if (!tool) return json(res, 400, { error: '未知工具' });
+      const cwd = expandPath(node.cwd || '');
+      if (!cwd || !fs.existsSync(cwd)) return json(res, 400, { error: `工作目录不存在: ${cwd}` });
+      const sid = String(node.sessionId || '').trim();
+      if (!sid) return json(res, 400, { error: '这个会话没有 session id，无法分支' });
+      // Claude Code 的 --fork-session 只有在第一次输入后才落盘新会话文件，无法马上绑定节点
+      if (node.tool === 'claude') {
+        return json(res, 400, { error: 'Claude Code 的分支需要先发一条消息才生成新会话，暂不支持一键分支；可在终端执行 claude --resume ' + sid + ' --fork-session' });
+      }
+
+      let command = '';
+      let resumeCommand = '';
+      if (node.tool === 'codex') { command = `codex fork ${sid}`; resumeCommand = 'codex resume'; }
+      else if (node.tool === 'claude') { command = `claude --resume ${sid} --fork-session`; resumeCommand = 'claude --resume'; }
+      else { command = `pi --fork ${sid}`; resumeCommand = 'pi --session'; }
+
+      let before = new Set();
+      try { before = new Set((tool.list({ limit: 200 }) || []).map((it) => String(it.id))); } catch { /* ignore */ }
+
+      const term = termmod.spawnTerm({ tool: node.tool, cwd, command, label: `${TOOL_LABELS[node.tool] || node.tool} · 分支` });
+
+      let created = null;
+      for (let i = 0; i < 48 && !created; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        try {
+          const items = tool.list({ limit: 200 }) || [];
+          created = items.find((it) => !before.has(String(it.id)) && normDir(it.cwd) === normDir(cwd)) || null;
+        } catch { /* ignore */ }
+      }
+      if (!created) {
+        return json(res, 200, {
+          ok: true, node: null, termId: term.id,
+          warning: '分支终端已启动，但还没检测到新会话文件；可在终端里继续，稍后自动获取会收录',
+        });
+      }
+      try {
+        const conv = tool.read(created.file);
+        const newNode = store.addNode(db, id, makeNode(tool.name, conv, {
+          parentNodeId: node.id,
+          resumeCommand: `${resumeCommand} ${conv.id}`,
+        }));
+        termmod.setTermNode(term.id, newNode.id);
+        return json(res, 200, { ok: true, node: newNode, termId: term.id });
+      } catch (err) {
+        return json(res, 500, { error: `读取分支会话失败: ${err.message}`, termId: term.id });
+      }
     }
 
     /* 上下文用量（单节点，轻量）：读工具自己的用量记录 + 该节点终端里的状态栏 */
