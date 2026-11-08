@@ -122,13 +122,21 @@ function renderBoard() {
   cardsEl.innerHTML = nodes.map((n) => {
     const pos = positions.get(n.id);
     const meta = n.summary || {};
-    const branch = n.parentNodeId ? '<span class="chip branch">复制</span>' : '';
+    // 卡片来源标记：接力（检查点续做/跨工具）与分支（原生 fork 复制会话）分开标注
+    const edgeKind = n.edgeKind
+      || (n.checkpointVersion || n.registration || n.trimmedCount != null ? 'handoff'
+        : (n.parentNodeId && n.resumeCommand ? 'branch' : ''));
+    const edgeChip = edgeKind === 'handoff'
+      ? '<span class="chip handoff" title="接力：从检查点续做的新会话">接力</span>'
+      : edgeKind === 'branch'
+        ? '<span class="chip branch" title="分支：原生 fork 复制当前会话（原会话不变）">分支</span>'
+        : '';
     const running = nodeTermFor(n) ? '<span class="run-dot" title="终端运行中"></span>' : '';
     return `<div class="card ${visible.includes(n.id) && !boardMode ? 'selected' : ''} ${n.id === activeTabId && !boardMode ? 'focused' : ''} ${boardMode && boardSel.has(n.id) ? 'sel' : ''}" data-node="${n.id}"
       style="left:${pos.x}px;top:${pos.y}px">
       <div class="card-head">
         <span class="chip ${n.tool}">${toolLabel(n.tool)}</span>
-        ${branch}
+        ${edgeChip}
         ${running}
         <span class="time">${fmtTime(n.createdAt)}</span>
       </div>
