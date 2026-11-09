@@ -307,7 +307,7 @@ function spMountSide(body, sideNode) {
     <div class="sp-chat">
       <div class="sp-chat-head">
         <span class="sp-chat-title" title="${escapeHtml(sideNode.title || '侧边对话')}">${escapeHtml(sideNode.title || '侧边对话')}</span>
-        <button type="button" class="sp-chat-new" data-sp-switch title="切换 / 新建侧边对话">↺</button>
+        <button type="button" class="sp-chat-new" data-sp-switch title="历史侧边对话（切换 / 新建）">${icon('history', 12)}</button>
       </div>
       <div class="sp-chat-list" data-sp-list></div>
       <div class="sp-chat-status" data-sp-status hidden></div>
