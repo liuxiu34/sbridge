@@ -431,6 +431,106 @@ function openSearchModal() {
   return close;
 }
 
+/** 编程工具安装/更新：缺的装、旧的更新，Pi 扩展一键装；默认定时自动保持最新 */
+function openToolchainModal() {
+  const PI_PKGS = [
+    { pkg: '@dreki-gg/pi-plan-mode', label: '计划模式', note: '给 Pi 提供 /plan' },
+    { pkg: '@narumitw/pi-goal', label: '目标模式', note: '给 Pi 提供 /goal' },
+    { pkg: 'pi-web-access', label: '网页搜索', note: '联网搜索与抓取' },
+  ];
+  const close = openModal({
+    title: '编程工具安装与更新',
+    submitLabel: '',
+    bodyHtml: `
+      <div class="hint" id="tc-hint" style="color:#9a9aa4;margin-bottom:10px">正在读取版本…</div>
+      <div class="set-row" style="margin-bottom:12px">
+        <span class="set-text"><span class="pick-title">自动保持最新</span>
+        <span class="pick-sub">启动后检查一次，之后每 12 小时检查；发现新版本就自动更新</span></span>
+        <span class="switch"><input type="checkbox" id="tc-auto" checked /><i></i></span>
+      </div>
+      <div id="tc-list"></div>
+      <div class="ctx-label" style="margin-top:14px">Pi 扩展</div>
+      <div id="tc-pi"></div>`,
+  });
+  const render = async () => {
+    const hint = $('tc-hint');
+    const list = $('tc-list');
+    try {
+      const data = await api('/api/tools/versions');
+      $('tc-auto').checked = data.autoUpdate !== false;
+      const rows = data.tools.map((t) => `
+        <div class="env-row">
+          <div class="env-head">
+            <span class="chip ${t.tool}">${escapeHtml(t.label)}</span>
+            <span class="env-badge ${t.installed ? 'ok' : 'bad'}">${t.installed ? `已安装 ${escapeHtml(t.version || '')}` : '未安装'}</span>
+            ${t.latest ? `<span class="env-badge ${t.outdated ? 'bad' : 'ok'}">npm ${escapeHtml(t.latest)}${t.outdated ? ' · 有新版' : ''}</span>` : ''}
+            <button type="button" class="btn-ghost" data-update="${t.tool}" ${t.outdated || !t.installed ? '' : 'disabled'}>
+              ${t.installed ? (t.outdated ? '更新' : '已最新') : '安装'}
+            </button>
+          </div>
+        </div>`).join('');
+      list.innerHTML = rows;
+      const pi = data.pi || {};
+      $('tc-pi').innerHTML = PI_PKGS.map((p) => {
+        const on = p.pkg.includes('plan-mode') ? pi.plan : p.pkg.includes('goal') ? pi.goal : pi.search;
+        return `<div class="env-row">
+          <div class="env-head">
+            <span class="env-badge ${on ? 'ok' : 'bad'}">${on ? '已装' : '未装'}</span>
+            <b style="font-size:12.5px">${escapeHtml(p.label)}</b>
+            <span class="env-line" style="margin:0">${escapeHtml(p.note)}</span>
+            <button type="button" class="btn-ghost" data-pi="${escapeHtml(p.pkg)}" ${on ? 'disabled' : ''}>${on ? '已安装' : '安装'}</button>
+          </div>
+        </div>`;
+      }).join('');
+      hint.textContent = '安装/更新会调用 npm 或 pi，可能需要几十秒；完成后自动重新检测。';
+      list.querySelectorAll('[data-update]').forEach((btn) => {
+        btn.onclick = async () => {
+          const tool = btn.dataset.update;
+          btn.disabled = true;
+          const old = btn.textContent;
+          btn.textContent = '安装中…';
+          try {
+            const r = await api('/api/tools/update', { method: 'POST', body: { tool } });
+            toast(`${toolLabel(tool)} 已更新到 ${r.version || '最新版'}`);
+            hint.textContent = String(r.output || '').slice(-200);
+            await render();
+          } catch (err) {
+            toast(err.message);
+            btn.disabled = false;
+            btn.textContent = old;
+          }
+        };
+      });
+      $('tc-pi').querySelectorAll('[data-pi]').forEach((btn) => {
+        btn.onclick = async () => {
+          btn.disabled = true;
+          const old = btn.textContent;
+          btn.textContent = '安装中…';
+          try {
+            await api('/api/pi/install', { method: 'POST', body: { pkg: btn.dataset.pi } });
+            toast('扩展已安装');
+            await render();
+          } catch (err) {
+            toast(err.message);
+            btn.disabled = false;
+            btn.textContent = old;
+          }
+        };
+      });
+    } catch (err) {
+      hint.textContent = `读取失败：${err.message}`;
+    }
+  };
+  $('tc-auto').onchange = async (e) => {
+    try {
+      const r = await api('/api/tools/auto-update', { method: 'POST', body: { enabled: e.target.checked } });
+      toast(r.autoUpdate ? '已开启自动更新' : '已关闭自动更新');
+    } catch (err) { toast(err.message); }
+  };
+  render();
+  return close;
+}
+
 /** 环境诊断：CLI 安装 / 会话目录 / 登录与密钥配置（只读检测） */
 function openEnvCheckModal() {
   const close = openModal({

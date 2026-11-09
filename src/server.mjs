@@ -21,6 +21,7 @@ import { ensureSubagentProtocols } from './subagent-protocol.mjs';
 import { maybeCreateWorktree, isSbridgeWorktree, worktreeInfo, mergeWorktree } from './worktree.mjs';
 import { inspectChanges, listDir, readFilePreview } from './git-inspect.mjs';
 import { listModels, detectSessionModel, modelFlags } from './models.mjs';
+import { toolStatuses, updateTool, getAutoUpdate, setAutoUpdate, piExtensionState, installPiExtension, startAutoUpdate } from './toolchain.mjs';
 import { scanProjectState, scanProjectTruth, renderProjectTruth } from './project-scan.mjs';
 import { expandPath, samePath, truncate, estimateTokens } from './util.mjs';
 import { IS_SEA, ROOT, WEB_DIR, DATA_DIR } from './paths.mjs';
@@ -319,8 +320,41 @@ async function handleApi(req, res, url) {
     }
   }
 
-  if (req.method === 'GET' && resource === 'tools') {
-    return json(res, 200, { tools: Object.keys(TOOLS).map((id) => ({ id, label: TOOL_LABELS[id] || id })) });
+  if (req.method === 'GET' && resource === 'tools' && !id) {
+    // 各工具内置/已装的「模式」：Claude、Codex 内置计划+目标；Pi 看扩展装没装
+    const caps = piExtensionState();
+    const modesFor = (tid) => {
+      if (tid === 'claude' || tid === 'codex') return ['plan', 'goal'];
+      if (tid === 'pi') return [...(caps.plan ? ['plan'] : []), ...(caps.goal ? ['goal'] : [])];
+      return [];
+    };
+    return json(res, 200, {
+      tools: Object.keys(TOOLS).map((tid) => ({ id: tid, label: TOOL_LABELS[tid] || tid, modes: modesFor(tid) })),
+    });
+  }
+
+  /* 编程工具安装/更新服务：版本对比、安装、自动保持最新、Pi 扩展 */
+  if (req.method === 'GET' && resource === 'tools' && id === 'versions') {
+    try {
+      const tools = await toolStatuses();
+      return json(res, 200, { tools, autoUpdate: getAutoUpdate(), pi: piExtensionState() });
+    } catch (err) {
+      return json(res, 500, { error: `读取版本失败: ${err.message}` });
+    }
+  }
+  if (req.method === 'POST' && resource === 'tools' && id === 'update') {
+    const body = await readBody(req);
+    const r = await updateTool(String(body.tool || ''));
+    return json(res, r.ok ? 200 : 500, r);
+  }
+  if (req.method === 'POST' && resource === 'tools' && id === 'auto-update') {
+    const body = await readBody(req);
+    return json(res, 200, { autoUpdate: setAutoUpdate(body.enabled !== false) });
+  }
+  if (req.method === 'POST' && resource === 'pi' && id === 'install') {
+    const body = await readBody(req);
+    const r = await installPiExtension(String(body.pkg || ''));
+    return json(res, r.ok ? 200 : 500, { ...r, pi: piExtensionState() });
   }
 
   /* 环境诊断：CLI 是否安装、会话目录是否存在、登录/密钥是否已配置（不联网验证账号） */
@@ -1881,6 +1915,8 @@ function onStarted(port) {
     });
     // 子代理修复协议随软件分发：装了 sbridge 的机器，Codex/Pi 自动获得子代理修复能力（幂等）
     ensureSubagentProtocols();
+    // 编程工具安装/更新服务：启动后检查一次，之后每 12 小时检查，落后就自动更新
+    startAutoUpdate();
   }, 200);
 }
 

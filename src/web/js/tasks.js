@@ -4,8 +4,16 @@
 async function loadState() {
   state = await api('/api/state');
   if (!state.tools?.length) {
-    try { state.tools = (await api('/api/tools')).tools; } catch { state.tools = DEFAULT_TOOLS; }
+    try {
+      const t = await api('/api/tools');
+      state.tools = t.tools;
+    } catch { state.tools = DEFAULT_TOOLS; }
   }
+  // 每个工具支持哪些「模式」（Claude/Codex 内置；Pi 看扩展装没装）
+  try {
+    const t = await api('/api/tools');
+    state.toolModes = Object.fromEntries((t.tools || []).map((x) => [x.id, x.modes || []]));
+  } catch { state.toolModes = null; }
   renderTree();
   refreshTerms();
 }

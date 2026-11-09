@@ -40,6 +40,11 @@ function openSettingsModal() {
         <span class="switch"><input type="checkbox" id="set-syncmodel" ${userSettings.syncModel !== false ? 'checked' : ''}/><i></i></span>
       </div>
       <div class="set-row">
+        <span class="set-text"><span class="pick-title">编程工具安装与更新</span>
+        <span class="pick-sub">Claude Code / Codex / Pi 是否安装、版本是否最新；缺的直接装，旧的直接更新（默认每 12 小时自动检查一次）</span></span>
+        <button type="button" class="btn-ghost" id="set-toolchain">${icon('download')} 管理</button>
+      </div>
+      <div class="set-row">
         <span class="set-text"><span class="pick-title">环境诊断</span>
         <span class="pick-sub">检查 Codex / Pi / Claude Code 是否安装、会话目录与登录/密钥配置；只读检测，不改任何配置</span></span>
         <button type="button" class="btn-ghost" id="set-envcheck">${icon('radar')} 检查</button>
@@ -54,6 +59,7 @@ function openSettingsModal() {
     },
   });
   $('set-envcheck').onclick = () => { close(); openEnvCheckModal(); };
+  $('set-toolchain').onclick = () => { close(); openToolchainModal(); };
 }
 
 /* ---------- 赞助入口：填好链接后侧栏才会出现「♥ 支持」 ---------- */
@@ -325,7 +331,7 @@ const TOOL_COMMANDS = {
 };
 const toolCommands = (tool) => TOOL_COMMANDS[tool] || [];
 
-/* 模式：只有 Claude Code / Codex 内置了计划模式与目标模式（Pi 需另装扩展，未装就不显示） */
+/* 模式：Claude/Codex 内置；Pi 需要装对应扩展（是否显示由服务端 /api/tools 的 modes 决定） */
 const TOOL_MODES = {
   claude: [
     ['plan', '计划模式', '先列计划、确认后再动手'],
@@ -335,8 +341,17 @@ const TOOL_MODES = {
     ['plan', '计划模式', '先列计划、确认后再动手'],
     ['goal', '目标模式', '设定目标，未达成前持续执行'],
   ],
+  pi: [
+    ['plan', '计划模式', '先列计划、确认后再动手'],
+    ['goal', '目标模式', '设定目标，未达成前持续执行'],
+  ],
 };
-const toolModes = (tool) => TOOL_MODES[tool] || [];
+const toolModes = (tool) => {
+  const list = TOOL_MODES[tool] || [];
+  const allowed = state.toolModes?.[tool];
+  if (!Array.isArray(allowed)) return list;
+  return list.filter(([id]) => allowed.includes(id));
+};
 
 /* ---------- 输入框「＋」菜单：上传文件 / 当前工具支持的斜杠命令 ---------- */
 function openPlusMenu({ anchor, tool, stacked = false, onFiles, onCommand }) {
