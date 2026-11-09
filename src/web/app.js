@@ -1,7 +1,7 @@
 /* sbridge · 入口：启动流程（所有模块按顺序加载后执行这里） */
 
 /* ---------------- 启动 ---------------- */
-// 主题：恢复上次选择 + 绑定右上角切换按钮
+// 主题：恢复上次选择 + 绑定侧栏左下角的切换按钮
 theme.apply();
 $('btn-theme')?.addEventListener('click', () => theme.toggle());
 /* 静态按钮图标注入（index.html 里的按钮，文本保留、字符图标换 SVG） */
@@ -21,7 +21,6 @@ $('btn-theme')?.addEventListener('click', () => theme.toggle());
   decorate('btn-split', 'split', '分屏');
   decorate('btn-launch', 'chat', '新开会话');
   decorate('btn-attach', 'link', '接入已有会话');
-  decorate('btn-theme', document.body.classList.contains('theme-dark') ? 'sun' : 'moon', '');
   const bb = $('btn-board-view');
   if (bb) bb.innerHTML = icon('board', 12) + ' 白板视图';
 })();

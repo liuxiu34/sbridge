@@ -88,7 +88,7 @@ function openSupportModal() {
   });
 }
 
-/* ---------- 主题系统：浅色（Solarized Light 风格）/ 深色（原版），右上角切换 ---------- */
+/* ---------- 主题系统：浅色（Solarized Light 风格）/ 深色（原版），侧栏左下角「设置」旁切换 ---------- */
 const XTERM_THEMES = {
   light: {
     background: '#fdf6e3',
@@ -127,7 +127,7 @@ const theme = {
   apply() {
     document.body.classList.toggle('theme-dark', this.current === 'dark');
     const btn = $('btn-theme');
-    if (btn) btn.innerHTML = this.current === 'dark' ? icon('sun') : icon('moon');
+    if (btn) btn.innerHTML = `${icon(this.current === 'dark' ? 'sun' : 'moon')} 主题`;
     for (const t of this.liveTerms) {
       try { t.options.theme = this.xtermTheme(); } catch { /* ignore */ }
     }
