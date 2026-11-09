@@ -1951,3 +1951,42 @@ pre.mermaid:not([data-processed]) {
   background: var(--accent); color: #fff; font: inherit; font-size: 12.5px; cursor: pointer;
 }
 .sp-chat-send:disabled { opacity: .5; cursor: default; }
+
+/* ---------- 侧边栏宽度拖拽 + 输入框引用文件 + 面板内模型切换 ---------- */
+.side-panel { max-width: min(760px, 62vw); }
+.sp-resizer {
+  flex: none; width: 8px; margin-left: -4px; margin-right: -4px;
+  cursor: col-resize; position: relative; z-index: 6; touch-action: none;
+}
+.sp-resizer[hidden] { display: none; }
+.sp-resizer::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px;
+  border-radius: 2px; background: transparent; transition: background .15s ease;
+}
+.sp-resizer:hover::after, .sp-resizer.dragging::after { background: var(--accent); }
+
+.btn-attach {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 7px; border: 1px solid transparent;
+  background: transparent; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer;
+}
+.btn-attach:hover { background: var(--hover-soft); color: var(--text); border-color: var(--line-strong); }
+.btn-attach:disabled { opacity: .45; cursor: default; }
+
+.sp-chat { position: relative; }
+.sp-chat-model {
+  flex: none; display: inline-flex; align-items: center; gap: 3px; max-width: 138px;
+  height: 22px; padding: 0 7px; border: 1px solid var(--line); border-radius: 7px;
+  background: transparent; color: var(--muted); font: inherit; font-size: 11px; cursor: pointer;
+}
+.sp-chat-model span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-chat-model:hover { background: var(--hover-soft); color: var(--text); border-color: var(--line-strong); }
+.sp-chat-model svg { flex: none; opacity: .6; }
+.model-pop.is-down { top: calc(100% + 6px); bottom: auto; right: 8px; }
+
+.sp-chat-attach {
+  flex: none; width: 30px; height: 34px; border-radius: 9px; border: 1px solid var(--line-strong);
+  background: transparent; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer;
+}
+.sp-chat-attach:hover { background: var(--hover-soft); color: var(--text); }
+.sp-chat-attach:disabled { opacity: .45; cursor: default; }
