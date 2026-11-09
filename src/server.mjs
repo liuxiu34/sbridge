@@ -1170,6 +1170,21 @@ if (req.method === 'GET' && resource === 'stream') {
       return json(res, 200, { project: state, text: renderProjectTruth(state, cwd) });
     }
 
+    /* Git 面板：按任务里已知的会话目录取单个文件的 diff（只认任务自己的目录，不接受任意路径） */
+    if (req.method === 'GET' && sub === 'git-diff') {
+      const task = db.tasks.find((t) => t.id === id);
+      if (!task) return json(res, 404, { error: '任务不存在' });
+      const dirs = [...new Set(task.nodes.map((n) => expandPath(n.cwd || '')).filter(Boolean))];
+      const want = url.searchParams.get('cwd') ? expandPath(url.searchParams.get('cwd')) : '';
+      const cwd = dirs.includes(want) ? want : dirs[0];
+      if (!cwd) return json(res, 400, { error: '这个任务没有可用的工作目录' });
+      try {
+        return json(res, 200, inspectChanges(cwd, url.searchParams.get('path') || ''));
+      } catch (err) {
+        return json(res, 400, { error: err.message });
+      }
+    }
+
     /* 会话分支：用对应 CLI 的原生 fork 复制当前会话（保留完整历史），新建节点挂在父节点下 */
     if (req.method === 'POST' && sub === 'nodes' && subId && extra === 'fork') {
       const task = db.tasks.find((t) => t.id === id);

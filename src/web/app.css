@@ -2029,3 +2029,15 @@ pre.mermaid:not([data-processed]) {
 }
 .attach-empty { padding: 8px; font-size: 12px; color: var(--muted); }
 .sp-subtitle { margin: 14px 0 6px; font-size: 11.5px; font-weight: 560; color: var(--muted); }
+
+/* ---------- Git 面板（项目级完整视图） ---------- */
+.sp-git-refresh { margin-left: auto; }
+.sp-commits { display: flex; flex-direction: column; gap: 1px; }
+.sp-commit {
+  display: flex; align-items: baseline; gap: 8px; padding: 5px 6px;
+  border-radius: 7px; font-size: 11.5px;
+}
+.sp-commit:hover { background: var(--hover-soft); }
+.sp-commit-sha { flex: none; font-family: ui-monospace, Consolas, monospace; color: var(--accent); }
+.sp-commit-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.sp-commit-time { flex: none; color: var(--muted); font-size: 10.5px; }
