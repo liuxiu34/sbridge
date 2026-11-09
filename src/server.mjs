@@ -20,6 +20,7 @@ import { renderTranscript } from './transcript.mjs';
 import { ensureSubagentProtocols } from './subagent-protocol.mjs';
 import { maybeCreateWorktree, isSbridgeWorktree, worktreeInfo, mergeWorktree } from './worktree.mjs';
 import { inspectChanges, listDir, readFilePreview } from './git-inspect.mjs';
+import { listModels, detectSessionModel, modelFlags } from './models.mjs';
 import { scanProjectState, scanProjectTruth, renderProjectTruth } from './project-scan.mjs';
 import { expandPath, samePath, truncate, estimateTokens } from './util.mjs';
 import { IS_SEA, ROOT, WEB_DIR, DATA_DIR } from './paths.mjs';
@@ -933,12 +934,13 @@ if (req.method === 'GET' && resource === 'stream') {
       if (headlessBusy.has(node.id)) return json(res, 409, { error: '上一条消息还在执行中，等它完成再发' });
       // 无头命令：claude -p --resume <id> / pi --session <id> -p / codex exec resume <id>。
       // 消息一律走 stdin（避开 Windows 命令行引号地狱）；NO_PROXY 放行本地网关。
-      const cmd = {
+      const baseCmd = {
         claude: `claude -p --permission-mode acceptEdits${sessionId ? ` --resume ${sessionId}` : ''}`,
         pi: `pi${sessionId ? ` --session ${sessionId}` : ''} -p`,
         codex: `codex exec --skip-git-repo-check -s workspace-write${sessionId ? ` resume ${sessionId}` : ''} -`,
       }[node.tool];
-      if (!cmd) return json(res, 400, { error: '该工具暂不支持无头发送' });
+      if (!baseCmd) return json(res, 400, { error: '该工具暂不支持无头发送' });
+      const cmd = baseCmd + modelFlags(node.tool, node.model, node.modelProvider);
       headlessBusy.add(node.id);
       headlessStatus.set(node.id, { running: true, startedAt: Date.now(), tool: node.tool });
       let child;
@@ -1002,6 +1004,13 @@ if (req.method === 'GET' && resource === 'stream') {
         }
       }
       command = command || LAUNCH_COMMANDS[body.tool];
+      // 这个会话在工作轨迹里选过模型：新终端直接带同样的模型启动（两边保持一致）
+      const modelNode = body.nodeId
+        ? db.tasks.flatMap((t) => t.nodes).find((n) => n.id === body.nodeId)
+        : null;
+      if (modelNode?.model && !/--model\b/.test(command)) {
+        command += modelFlags(body.tool, modelNode.model, modelNode.modelProvider);
+      }
       // Claude/Codex 的 resume 不回放历史（CLI 无行式模式），从会话文件生成显示层回放；
       // pi 自带 --tui-mode regular 回放，注入反而重复。
       // 回放注入仅对「行式打印」工具有意义。Claude/Codex 的 TUI 启动用 \x1b[H 绝对定位
@@ -1258,6 +1267,59 @@ if (req.method === 'GET' && resource === 'stream') {
         'cache-control': 'no-cache',
       });
       return res.end(renderSessionMarkdown(node, evts));
+    }
+
+    /* 模型：读取当前模型 + 可选列表（数据来自各 CLI 自己的配置） */
+    if (req.method === 'GET' && sub === 'nodes' && subId && extra === 'model') {
+      const node = db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      const catalog = listModels(node.tool);
+      const detected = detectSessionModel(node);
+      const sync = url.searchParams.get('sync') !== '0';
+      // modelSeen = 上次记录时会话文件里的模型值；两者不同 = 终端里真的换过模型
+      const terminalChanged = !!detected && detected !== (node.modelSeen || '');
+      // 同步开启时：终端里改过模型就回填到节点，保证无头执行用同一个
+      if (sync && terminalChanged) {
+        try {
+          const fresh = store.load();
+          const n2 = fresh.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
+          if (n2) { n2.model = detected; n2.modelSeen = detected; store.save(fresh); }
+        } catch { /* 写回失败不影响展示 */ }
+      }
+      const current = sync && terminalChanged
+        ? (detected || node.model || catalog.configModel || '')
+        : (node.model || detected || catalog.configModel || '');
+      return json(res, 200, {
+        tool: node.tool, current, sync, detected: detected || null,
+        stored: node.model || null, configModel: catalog.configModel || '',
+        options: catalog.options || [],
+      });
+    }
+
+    /* 切换模型：写入节点；终端在跑且同步开启时同时给 TUI 发 /model */
+    if (req.method === 'POST' && sub === 'nodes' && subId && extra === 'model') {
+      const body = await readBody(req);
+      const model = String(body.model || '').trim();
+      if (!model) return json(res, 400, { error: '模型为空' });
+      const fresh = store.load();
+      const task = fresh.tasks.find((t) => t.id === id);
+      const node = task?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      node.model = model;
+      node.modelProvider = body.provider ? String(body.provider) : null;
+      // 记住此刻会话文件里的模型：之后它变了，说明是在终端里改的
+      node.modelSeen = detectSessionModel(node) || null;
+      node.modelAt = new Date().toISOString();
+      store.save(fresh);
+      const sync = body.sync !== false;
+      let applied = 'saved';
+      if (sync && termmod.runningTermForNode(node.id)) {
+        // pi 的 TUI /model 需要 provider/id；其它工具直接用模型名
+        const termModel = node.modelProvider && !model.includes('/')
+          ? `${node.modelProvider}/${model}` : model;
+        if (termmod.writeToNode(node.id, `/model ${termModel}`)) applied = 'term';
+      }
+      return json(res, 200, { ok: true, model, provider: node.modelProvider, applied, sync });
     }
 
     /* 右侧面板：改动（git status / 单文件 diff），只读 */

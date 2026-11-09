@@ -81,7 +81,9 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
           <div class="composer-bar">
             <span class="composer-note" data-role="checkout"></span>
             <span class="composer-grow"></span>
-            <span class="composer-tool"><span class="chip ${node.tool}">${toolLabel(node.tool)}</span></span>
+            <button type="button" class="model-btn" data-role="model" title="切换这个会话使用的模型">
+              <span class="model-name" data-role="modelname">模型</span>${icon('chevronDown', 12)}
+            </button>
             <button type="button" class="btn-send" data-role="send" title="发送（Enter）">${icon('arrowUp', 15)}</button>
           </div>
         </div>
@@ -106,6 +108,88 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     const branch = currentTask?.project?.branch || '';
     checkoutEl.textContent = [branch, dirName].filter(Boolean).join(' · ');
   }
+
+  /* ---------- 模型切换（和终端 /model 等价，默认两边同步） ---------- */
+  const modelBtn = host.querySelector('[data-role="model"]');
+  const modelNameEl = host.querySelector('[data-role="modelname"]');
+  const composerEl = host.querySelector('.composer');
+  let modelPop = null;
+  let modelData = { current: '', options: [] };
+  let modelRefreshedAt = 0;
+  const modelSync = () => userSettings.syncModel !== false;
+  const shortModel = (s) => String(s || '').replace(/\[[^\]]+\]$/, '');
+  const setModelLabel = (m) => {
+    if (!modelNameEl) return;
+    modelNameEl.textContent = shortModel(m) || '模型';
+    modelBtn.title = m ? `当前模型：${m}（点击切换）` : '切换这个会话使用的模型';
+  };
+  const loadModel = async () => {
+    if (!modelBtn) return;
+    try {
+      const d = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/model?sync=${modelSync() ? 1 : 0}`);
+      modelData = d;
+      setModelLabel(d.current);
+    } catch { /* 读不到就保持原样 */ }
+  };
+  const closeModelPop = () => { if (modelPop) { modelPop.remove(); modelPop = null; } };
+  const applyModel = async (opt) => {
+    if (!opt) return;
+    closeModelPop();
+    try {
+      const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/model`, {
+        method: 'POST',
+        body: { model: opt.id, provider: opt.provider || null, sync: modelSync() },
+      });
+      modelData.current = opt.id;
+      setModelLabel(opt.id);
+      toast(r.applied === 'term'
+        ? `已切换模型：${shortModel(opt.id)}（终端已同步）`
+        : `已切换模型：${shortModel(opt.id)}（下次终端/发送生效）`);
+    } catch (err) { toast(err.message); }
+  };
+  const openModelPop = async () => {
+    if (!modelBtn || !composerEl) return;
+    if (modelPop) { closeModelPop(); return; }
+    await loadModel();
+    modelPop = document.createElement('div');
+    modelPop.className = 'model-pop';
+    modelPop.innerHTML = `
+      <input class="model-search" data-role="modelsearch" placeholder="搜索模型…" autocomplete="off" />
+      <div class="model-list" data-role="modellist"></div>
+      <div class="model-foot">${modelSync() ? '与终端同步：开' : '与终端同步：关（在设置里改）'}</div>`;
+    composerEl.appendChild(modelPop);
+    const listEl = modelPop.querySelector('[data-role="modellist"]');
+    const input = modelPop.querySelector('[data-role="modelsearch"]');
+    const paint = (q) => {
+      const kw = String(q || '').trim().toLowerCase();
+      const opts = (modelData.options || []).filter((o) => !kw
+        || String(o.id).toLowerCase().includes(kw)
+        || String(o.label || '').toLowerCase().includes(kw));
+      listEl.innerHTML = opts.length ? opts.slice(0, 200).map((o, i) => `
+        <button type="button" class="model-item ${o.id === modelData.current ? 'active' : ''}" data-mi="${i}">
+          <span class="model-item-label">${escapeHtml(o.label || o.id)}</span>
+          <span class="model-item-note">${escapeHtml(o.note || '')}</span>
+        </button>`).join('') : '<div class="model-empty">没有匹配的模型</div>';
+      listEl.querySelectorAll('[data-mi]').forEach((b) => {
+        b.onclick = () => applyModel(opts[Number(b.dataset.mi)]);
+      });
+    };
+    paint('');
+    input.addEventListener('input', () => paint(input.value));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); closeModelPop(); }
+    });
+    input.focus();
+    // 点面板外收起
+    setTimeout(() => {
+      const outside = (e) => {
+        if (modelPop && !modelPop.contains(e.target) && e.target !== modelBtn && !modelBtn.contains(e.target)) closeModelPop();
+      };
+      document.addEventListener('click', outside, { once: true });
+    }, 0);
+  };
+  modelBtn?.addEventListener('click', (e) => { e.stopPropagation(); openModelPop(); });
+  loadModel();
   // 进度分叉提示，两个按钮时机不同：
   //   跳转到最新会话 = 仅链内有更新的后代时出现（同链新会话取代了本会话）
   //   合并全部进度并继续 = 只要本会话不是全任务最新就出现（它没掌握全部最新进度，跨链动态也算）
@@ -649,6 +733,8 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         scheduleStreamUi();
       });
       try { renderSubagents(); } catch { /* ignore */ }
+      // 回到工作轨迹时刷一次模型标签：终端里 /model 改过也能跟上
+      if (Date.now() - modelRefreshedAt > 5000) { modelRefreshedAt = Date.now(); loadModel(); }
     }
   };
   const setStreamView = (v) => { if (showingStream !== v) applyStreamView(v); };

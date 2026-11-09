@@ -15,7 +15,7 @@ const $ = (id) => document.getElementById(id);
 
 /* ---------- 用户设置：localStorage 持久化 ---------- */
 const SETTINGS_KEY = 'sbridge-settings';
-const DEFAULT_SETTINGS = { autoStartTerm: true }; // 打开会话自动启动终端（默认开，设置里可关）
+const DEFAULT_SETTINGS = { autoStartTerm: true, syncModel: true }; // 打开会话自动启动终端；工作轨迹与终端同步模型
 let userSettings = loadUserSettings();
 function loadUserSettings() {
   try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
@@ -35,13 +35,21 @@ function openSettingsModal() {
         <span class="switch"><input type="checkbox" id="set-autoterm" ${userSettings.autoStartTerm ? 'checked' : ''}/><i></i></span>
       </label>
       <div class="set-row">
+        <span class="set-text"><span class="pick-title">工作轨迹与终端同步模型</span>
+        <span class="pick-sub">在工作轨迹切换模型时同步写入终端；终端里用 /model 改过也会自动回填。关闭后两边各改各的，互不影响</span></span>
+        <span class="switch"><input type="checkbox" id="set-syncmodel" ${userSettings.syncModel !== false ? 'checked' : ''}/><i></i></span>
+      </div>
+      <div class="set-row">
         <span class="set-text"><span class="pick-title">环境诊断</span>
         <span class="pick-sub">检查 Codex / Pi / Claude Code 是否安装、会话目录与登录/密钥配置；只读检测，不改任何配置</span></span>
         <button type="button" class="btn-ghost" id="set-envcheck">${icon('radar')} 检查</button>
       </div>`,
     submitLabel: '保存',
     onSubmit: () => {
-      saveUserSettings({ autoStartTerm: $('set-autoterm').checked });
+      saveUserSettings({
+        autoStartTerm: $('set-autoterm').checked,
+        syncModel: $('set-syncmodel').checked,
+      });
       toast('设置已保存');
     },
   });
@@ -200,6 +208,7 @@ const ICONS = {
   panel: '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M14.6 4.5v15" opacity=".55"/><path d="M17.4 8.6h1.6M17.4 11.4h1.6" opacity=".8"/>', // 右侧面板
   diff: '<path d="M8 4v12"/><circle cx="8" cy="18.5" r="2"/><circle cx="16" cy="5.5" r="2"/><path d="M16 7.5v6a4 4 0 0 1-4 4h-2"/>', // 改动对比
   arrowUp: '<path d="M12 19V5"/><path d="M6 11l6-6 6 6"/>',                          // 发送
+  chevronDown: '<path d="M6 9.5l6 6 6-6"/>',                                          // 下拉
   file: '<path d="M6 3.5h7l5 5v12a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 5 20.5V5A1.5 1.5 0 0 1 6.5 3.5z"/><path d="M13 3.5V9h5" opacity=".6"/>', // 文件
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
 };
