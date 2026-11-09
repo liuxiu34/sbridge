@@ -251,9 +251,6 @@ function spMountSide(body, sideNode) {
     <div class="sp-chat">
       <div class="sp-chat-head">
         <span class="sp-chat-title" title="${escapeHtml(sideNode.title || '侧边对话')}">${escapeHtml(sideNode.title || '侧边对话')}</span>
-        <button type="button" class="sp-chat-model" data-sp-model title="切换这个侧边会话的模型">
-          <span data-sp-modelname>模型</span>${icon('chevronDown', 10)}
-        </button>
         <button type="button" class="sp-chat-new" data-sp-switch title="切换 / 新建侧边对话">↺</button>
       </div>
       <div class="sp-chat-list" data-sp-list></div>
@@ -261,6 +258,9 @@ function spMountSide(body, sideNode) {
       <div class="sp-chat-compose">
         <button type="button" class="sp-chat-attach" data-sp-attach title="引用本地文件">＋</button>
         <textarea data-sp-input rows="1" placeholder="在侧边对话里问点别的…（Enter 发送）"></textarea>
+        <button type="button" class="sp-chat-model" data-sp-model title="切换这个侧边会话的模型">
+          <span data-sp-modelname>模型</span>${icon('chevronDown', 10)}
+        </button>
         <button type="button" class="sp-chat-send" data-sp-send>发送</button>
       </div>
     </div>`;
@@ -282,9 +282,11 @@ function spMountSide(body, sideNode) {
     isHeadlessRunning: () => spChat.busy,
     headlessElapsed: () => (spChat.busy ? Date.now() - spChat.startedAt : 0),
     scrollEl: listEl,
+    hideSeed: true,     // 上下文种子隐式继承，不占对话流
+    hideBranch: true,   // 侧边里的回答不给分支按钮，避免到处开枝散叶
   });
   spChat.cot = cot;
-  cot.showEmpty('侧边对话就绪，发第一条消息吧。');
+  cot.showEmpty('侧边对话已就绪，直接问就行。');
   cot.setConnected(true);
 
   const es = new EventSource(`/api/stream?tool=${encodeURIComponent(sideNode.tool)}&file=${encodeURIComponent(sideNode.file)}&tail=120`);
@@ -302,7 +304,7 @@ function spMountSide(body, sideNode) {
   /* 模型：和主对话共用接口（数据源就是各 CLI 自己的配置），切换只影响这条侧边会话 */
   const modelBtn = body.querySelector('[data-sp-model]');
   const modelNameEl = body.querySelector('[data-sp-modelname]');
-  const chatEl = body.querySelector('.sp-chat');
+  const composeEl = body.querySelector('.sp-chat-compose');
   const shortModel = (s) => String(s || '').replace(/\[[^\]]+\]$/, '');
   const modelSyncOn = () => userSettings.syncModel !== false;
   let modelPop = null;
@@ -339,12 +341,12 @@ function spMountSide(body, sideNode) {
     if (modelPop) { closeModelPop(); return; }
     await loadModel();
     modelPop = document.createElement('div');
-    modelPop.className = 'model-pop is-down';
+    modelPop.className = 'model-pop';
     modelPop.innerHTML = `
       <input class="model-search" data-role="spmodelsearch" placeholder="搜索模型…" autocomplete="off" />
       <div class="model-list" data-role="spmodellist"></div>
       <div class="model-foot">${modelSyncOn() ? '与终端同步：开' : '与终端同步：关（在设置里改）'}</div>`;
-    chatEl.appendChild(modelPop);
+    composeEl.appendChild(modelPop);
     const listEl2 = modelPop.querySelector('[data-role="spmodellist"]');
     const input = modelPop.querySelector('[data-role="spmodelsearch"]');
     const paint = (q) => {
