@@ -1332,6 +1332,76 @@ if (req.method === 'GET' && resource === 'stream') {
       return json(res, 200, { ok: true, node: sideNode, seedTokens, seedChars: digest.messageChars });
     }
 
+    /* 上下文面板：这个会话读写过的文件（从会话文件的工具调用里提取，按最近使用排序） */
+    if (req.method === 'GET' && sub === 'nodes' && subId && extra === 'context-files') {
+      const node = db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      const file = node.file && !String(node.file).startsWith('sqlite:') ? node.file : '';
+      const parser = PARSERS[node.tool];
+      const map = new Map();
+      if (file && parser) {
+        try {
+          const st = fs.statSync(file);
+          const len = Math.min(st.size, 1024 * 1024);
+          const buf = Buffer.alloc(len);
+          const fd = fs.openSync(file, 'r');
+          try { fs.readSync(fd, buf, 0, len, Math.max(0, st.size - len)); } finally { fs.closeSync(fd); }
+          let text = buf.toString('utf8');
+          if (st.size > len) text = text.slice(text.indexOf('\n') + 1);
+          const evts = [];
+          for (const line of text.split('\n')) {
+            const t = line.trim();
+            if (!t) continue;
+            try { parser(JSON.parse(t), evts); } catch { /* 半行/坏行跳过 */ }
+          }
+          for (const e of evts) {
+            if (e.kind !== 'tool_call') continue;
+            const s = typeof e.args === 'string' ? e.args : JSON.stringify(e.args || '');
+            // 先去掉 URL，避免把 api.xxx/yyy 这类网页路径当成文件；再把转义过的反斜杠还原
+            const clean = s
+              .replace(/https?:\/\/[^\s"']+/g, ' ')
+              .replace(/\/\/[^\s"']+/g, ' ')
+              .replace(/\\\\/g, '\\');
+            // 只认「以文件名+扩展名结尾」的路径，避免把补丁正文、正则片段整段吞进来
+            const winHits = clean.match(/[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]+\.[A-Za-z0-9]{1,8}/g) || [];
+            const posixHits = clean.match(/\/(?:[^\/:*?"<>|\r\n]+\/)+[^\/:*?"<>|\r\n]+\.[A-Za-z0-9]{1,8}/g) || [];
+            for (const raw of new Set([...winHits, ...posixHits])) {
+              // 补丁正文里的 \n、@@ 会把路径连到后面的代码上，截断后再校验
+              const p = raw.split(/\\n|\\t|@@/)[0].trim();
+              if (!p || p.length < 4 || p.length > 240) continue;
+              if (!/\.[A-Za-z0-9]{1,8}$/.test(p)) continue;
+              const isWinAbs = /^[A-Za-z]:\\/.test(p);
+              try {
+                const st = fs.statSync(p);
+                if (st.isDirectory()) continue;
+              } catch {
+                // 路径在这台机器上不存在：POSIX 路径多半是网页/日志片段，直接丢弃；Windows 路径保留
+                if (!isWinAbs) continue;
+              }
+              const key = p.toLowerCase();
+              const hit = map.get(key);
+              if (hit) { hit.ops += 1; if (e.ts) hit.lastAt = e.ts; }
+              else map.set(key, { path: p, ops: 1, lastAt: e.ts || null });
+            }
+          }
+        } catch { /* 读不到就返回空列表 */ }
+      }
+      const files = [...map.values()]
+        .sort((a, b) => String(b.lastAt || '').localeCompare(String(a.lastAt || '')) || b.ops - a.ops)
+        .slice(0, 60);
+      return json(res, 200, { files, total: map.size });
+    }
+
+    /* 压缩上下文：只能通过运行中的终端执行 /compact（无头打印模式不支持斜杠命令） */
+    if (req.method === 'POST' && sub === 'nodes' && subId && extra === 'compact') {
+      const node = db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      if (!termmod.runningTermForNode(node.id)) {
+        return json(res, 400, { error: '这个会话的终端没在运行；先在终端里启动会话，再点压缩' });
+      }
+      return json(res, 200, { ok: termmod.writeToNode(node.id, '/compact') });
+    }
+
     /* 上下文用量（单节点，轻量）：读工具自己的用量记录 + 该节点终端里的状态栏 */
     if (req.method === 'GET' && sub === 'nodes' && subId && extra === 'usage') {
       const node = db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
