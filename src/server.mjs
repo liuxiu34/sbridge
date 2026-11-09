@@ -1520,8 +1520,12 @@ function boardSessions(db, boardTaskId) {
 function openBrowser(port = PORT) {
   try {
     const url = `http://127.0.0.1:${port}`;
-    if (process.platform === 'win32') spawn(`start "" "${url}"`, { shell: true, detached: true, stdio: 'ignore' }).unref();
-    else spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+    const child = process.platform === 'win32'
+      ? spawn(`start "" "${url}"`, { shell: true, detached: true, stdio: 'ignore' })
+      : spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { detached: true, stdio: 'ignore' });
+    // 精简系统/无桌面环境可能没有 xdg-open：忽略 ENOENT，不能让未处理的 error 事件杀掉服务
+    child.on('error', () => { /* 打不开就让用户手动访问 */ });
+    child.unref();
   } catch { /* 打不开就让用户手动访问 */ }
 }
 
