@@ -233,12 +233,13 @@ function appendFileRefs(ta, paths) {
 
 /* ---------- 各 CLI 支持的斜杠命令 ----------
    CLI 都不提供「列出全部斜杠命令」的接口，这里的清单是按本机安装版本核对的：
-   - Pi    ：直接来自它自己的 dist/core/slash-commands.js（内置命令表）
-   - Claude：逐条在本机 claude.exe 字符串里核对过（含 /plan 计划模式）
-   - Codex ：按其 TUI 命令表整理（/plan、/goal 这类是 Trae 自己的功能，Codex 没有同名命令） */
+   - Pi    ：直接来自它自己的 dist/core/slash-commands.js（内置命令表；计划模式要靠官方示例扩展，未内置）
+   - Claude：逐条在本机 claude.exe 字符串里核对过（含 /plan 计划模式、/goal 目标模式）
+   - Codex ：按其 TUI 命令表整理（含 /plan、/goal；Trae 的 Spec 等是它自己的功能，CLI 没有） */
 const TOOL_COMMANDS = {
   claude: [
     ['plan', '计划模式：先出方案再动手'],
+    ['goal', '设定目标：未达成前不停止（clear 取消）'],
     ['todos', '查看/管理待办清单'],
     ['context', '查看上下文占用'],
     ['usage', '用量与额度'],
@@ -305,6 +306,7 @@ const TOOL_COMMANDS = {
     ['model', '选择模型'],
     ['approvals', '审批模式设置'],
     ['plan', '计划模式'],
+    ['goal', '设定目标（clear/edit/pause/resume）'],
     ['review', '代码审查'],
     ['diff', '查看改动'],
     ['undo', '撤销上一轮'],
