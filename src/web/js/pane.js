@@ -56,7 +56,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
           <button type="button" class="pbtn" data-pact="selfcheck" title="让这个会话自检：确认是否掌握项目最新、完整进度（只检查、不改文件）">${icon('radar')} 自检</button>
           <button type="button" class="pbtn ctx-btn" data-pact="ctx" title="会话上下文用量"><svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="ctx-ring-track" cx="10" cy="10" r="8"/><circle class="ctx-ring-val" cx="10" cy="10" r="8"/></svg><span class="ctx-ring-text" data-role="ctxtext">–</span></button>
           <button type="button" class="pbtn" data-pact="handoff" title="智能接力到其他工具">${icon('handoff')} 接力</button>
-          <button type="button" class="pbtn" data-pact="worktree" title="独立 worktree：查看改动并合并到主分支">${icon('git')} Worktree</button>
+          <button type="button" class="pbtn" data-pact="worktree" title="在右侧面板查看独立 worktree 的改动并合并到主分支">${icon('git')} Worktree</button>
           <button type="button" class="pbtn" data-pact="export" title="导出该会话为 Markdown（只读）">${icon('download')}</button>
           <button type="button" class="pbtn danger" data-pact="cancelheadless" title="取消正在执行的无头任务" hidden>${icon('stop')} 取消执行</button>
           <button type="button" class="pbtn danger" data-pact="stopterm" title="停止该会话的终端进程（相当于在终端里输入退出命令）" hidden>${icon('stop')} 停止</button>
@@ -555,63 +555,35 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   if (active) {
     const ta = host.querySelector('[data-role="input"]');
     const btn = host.querySelector('[data-role="send"]');
-    // 引用本地文件：把绝对路径插进输入框，agent 自己会读
+    // 「＋」菜单：上传文件 / 当前工具支持的斜杠命令
     const attachBtn = host.querySelector('[data-role="attach"]');
-    attachBtn?.addEventListener('click', async () => {
-      if (attachBtn.disabled) return;
-      attachBtn.disabled = true;
-      try {
-        const paths = await pickLocalFiles();
-        if (paths.length) {
-          appendFileRefs(ta, paths);
-          toast(`已引用 ${paths.length} 个文件`);
-        }
-      } finally { attachBtn.disabled = false; }
+    attachBtn?.addEventListener('click', () => {
+      openPlusMenu({
+        anchor: attachBtn,
+        tool: node.tool,
+        stacked: false,
+        onFiles: async () => {
+          if (attachBtn.disabled) return;
+          attachBtn.disabled = true;
+          try {
+            const paths = await pickLocalFiles();
+            if (paths.length) {
+              appendFileRefs(ta, paths);
+              toast(`已引用 ${paths.length} 个文件`);
+            }
+          } finally { attachBtn.disabled = false; }
+        },
+        onCommand: (cmd) => {
+          ta.value = `/${cmd} `;
+          ta.dispatchEvent(new Event('input', { bubbles: true }));
+          ta.focus();
+          try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch { /* ignore */ }
+        },
+      });
     });
     /* 斜杠命令菜单 + 历史命令（PgUp/PgDn）：让工作轨迹输入框的手感对齐终端。
        命令表是静态精选（CLI 的完整清单未暴露 API；菜单只做辅助，手输任意命令照常发送）。 */
-    const SLASH_COMMANDS = {
-      claude: [
-        ['model', '<provider/model> — 选择模型（打开选择器 UI）'],
-        ['settings', '打开设置菜单'],
-        ['tree', '会话树导航（切换分支）'],
-        ['thinking', '<level> — 设置思考等级'],
-        ['scoped-models', '启用/禁用 Ctrl+P 模型轮换'],
-        ['compact', '压缩对话上下文（上下文满时用）'],
-        ['clear', '清空当前对话'],
-        ['resume', '恢复历史会话'],
-        ['review', '代码审查'],
-        ['init', '初始化项目 CLAUDE.md'],
-        ['agents', '管理子代理'],
-        ['mcp', '管理 MCP 服务器'],
-        ['permissions', '权限管理'],
-        ['memory', '编辑记忆文件'],
-        ['config', '打开配置'],
-        ['cost', '用量统计'],
-        ['doctor', '安装/环境诊断'],
-        ['status', '账号与版本状态'],
-        ['export', '导出当前对话'],
-        ['login', '登录账号'],
-        ['logout', '退出登录'],
-        ['help', '帮助'],
-      ],
-      pi: [
-        ['model', '选择/切换模型'],
-        ['help', '帮助'],
-        ['clear', '清屏'],
-        ['login', '登录/配置账号'],
-      ],
-      codex: [
-        ['model', '选择模型'],
-        ['approvals', '审批模式设置'],
-        ['init', '初始化项目 AGENTS.md'],
-        ['status', '状态'],
-        ['compact', '压缩对话上下文'],
-        ['review', '代码审查'],
-        ['diff', '查看改动'],
-      ],
-    };
-    const slashList = SLASH_COMMANDS[node.tool] || [];
+    const slashList = toolCommands(node.tool);
     const sessInput = host.querySelector('.sess-input');
     const menu = document.createElement('div');
     menu.className = 'slash-menu';
@@ -721,7 +693,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   host.querySelector('[data-pact="ctx"]')?.addEventListener('click', () => openCtxModal(node));
   host.querySelector('[data-pact="handoff"]')?.addEventListener('click', () => openHandoffModal(node));
   host.querySelector('[data-pact="export"]')?.addEventListener('click', () => exportNodeMarkdown(node));
-  host.querySelector('[data-pact="worktree"]')?.addEventListener('click', () => openWorktreeModal(node));
+  host.querySelector('[data-pact="worktree"]')?.addEventListener('click', () => openSidePanel('worktree'));
   cancelHeadlessBtn?.addEventListener('click', () => cancelHeadless());
   // ⏹ 停止：杀掉该会话挂着的 PTY（等效在终端输入退出命令）；确认一次防误触
   const stopBtn = host.querySelector('[data-pact="stopterm"]');
