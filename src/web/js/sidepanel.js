@@ -2,6 +2,7 @@
    工作区共用一个，内容跟随当前聚焦会话；只读，不挂终端，开合不影响工作轨迹/终端切换。 */
 
 const SP_ITEMS = [
+  { id: 'side', icon: 'chat', label: '侧边对话', key: 'S', hint: '基于当前会话上下文开一条独立对话，和主会话同时进行' },
   { id: 'diff', icon: 'diff', label: '改动', key: 'D', hint: '当前会话目录的 git 改动与逐文件 diff' },
   { id: 'files', icon: 'folder', label: '文件', key: 'F', hint: '浏览会话目录，点文件看文本内容' },
   { id: 'context', icon: 'context', label: '上下文', key: 'C', hint: '这个任务已被捕获的认知与证据' },
@@ -10,6 +11,9 @@ const SP_ITEMS = [
 
 const spState = { open: false, surface: null, dir: '', file: null };
 let spLastKey = '';
+
+/* 侧边对话运行时状态：独立会话 + 自己的 SSE 流，面板关闭/切换时回收 */
+const spChat = { nodeId: null, es: null, cot: null, tick: 0, poll: 0, busy: false, startedAt: 0, mounted: '' };
 
 function currentPanelNode() {
   if (typeof findNode !== 'function') return null;
@@ -22,7 +26,10 @@ function spApiBase(node) {
 
 function refreshSidePanel(force = false) {
   if (!spState.open) return;
-  const key = `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
+  // 侧边对话是并行会话：不跟当前标签走，否则切个标签就把对话流打断
+  const key = spState.surface === 'side'
+    ? `side|${currentTask?.id || ''}|${spChat.nodeId || ''}`
+    : `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
   if (!force && key === spLastKey) return;
   spLastKey = key;
   spRender();
@@ -40,6 +47,9 @@ function toggleSidePanel(force) {
   if (want) {
     spLastKey = '';
     spRender();
+  } else {
+    spUnmountSide();
+    $('sp-body')?.classList.remove('sp-body-chat');
   }
   // 面板改变 pane 宽度：让当前终端的 xterm 重新量尺寸（refit 内部只在终端视图生效）
   setTimeout(() => {
@@ -70,7 +80,10 @@ async function spRender() {
   const body = $('sp-body');
   if (!body) return;
   // 记录本次渲染的签名：renderTabs 频繁触发 refreshSidePanel，签名一致就不再重绘（防闪烁）
-  spLastKey = `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
+  spLastKey = spState.surface === 'side'
+    ? `side|${currentTask?.id || ''}|${spChat.nodeId || ''}`
+    : `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
+  if (spState.surface !== 'side') spUnmountSide();
   const node = currentPanelNode();
   const item = SP_ITEMS.find((i) => i.id === spState.surface);
   $('sp-back').hidden = !spState.surface;
@@ -83,6 +96,7 @@ async function spRender() {
   }
   body.innerHTML = '<div class="sp-loading">加载中…</div>';
   try {
+    if (spState.surface === 'side') return spRenderSide(body, node);
     if (spState.surface === 'diff') return await spRenderDiff(body, node);
     if (spState.surface === 'files') return await spRenderFiles(body, node);
     if (spState.surface === 'context') return await spRenderContext(body, node);
@@ -122,6 +136,181 @@ document.addEventListener('keydown', (e) => {
     items[next].focus();
   }
 });
+
+/* ---------- 侧边对话 ---------- */
+function spSideNodes() {
+  return (currentTask?.nodes || []).filter((n) => n.edgeKind === 'side' || n.sideOf);
+}
+
+/** 回收侧边对话的流与定时器（不改 spChat.nodeId，方便重新打开同一段对话） */
+function spUnmountSide() {
+  if (spChat.es) { try { spChat.es.close(); } catch { /* ignore */ } spChat.es = null; }
+  clearInterval(spChat.tick); spChat.tick = 0;
+  clearTimeout(spChat.poll); spChat.poll = 0;
+  spChat.cot = null;
+  spChat.busy = false;
+  spChat.mounted = '';
+}
+
+async function spRenderSide(body, node) {
+  const sides = spSideNodes();
+  const cur = sides.find((n) => n.id === spChat.nodeId);
+  if (cur) return spMountSide(body, cur);
+  spUnmountSide();
+  body.classList.remove('sp-body-chat');
+  body.innerHTML = `
+    <div class="sp-side">
+      <button type="button" class="btn-primary sp-side-new" data-sp-new>＋ 基于当前会话开启侧边对话</button>
+      <p class="sp-side-note">把当前会话最近的上下文摘录成一份独立会话，在右侧并行对话；主会话不受影响，两边可以同时进行。</p>
+      ${sides.length ? `<div class="sp-side-list">${sides.map((n) => `
+        <button type="button" class="sp-side-item" data-sp-side="${n.id}">
+          <span class="sp-side-item-title">${escapeHtml(n.title || '侧边对话')}</span>
+          <span class="sp-side-item-meta">${toolLabel(n.tool)} · ${fmtTime(n.lastActivity || n.createdAt)} · ${n.summary?.messageCount || 0} 条消息</span>
+        </button>`).join('')}</div>` : ''}
+    </div>`;
+
+  const newBtn = body.querySelector('[data-sp-new]');
+  newBtn?.addEventListener('click', async () => {
+    if (!currentTask || !node) return;
+    newBtn.disabled = true;
+    const label = newBtn.textContent;
+    newBtn.textContent = '正在创建…';
+    try {
+      const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/side-chat`, { method: 'POST' });
+      await refreshTask();
+      spChat.nodeId = r.node.id;
+      spLastKey = '';
+      spRender();
+      toast(`侧边对话已创建（带入约 ${r.seedTokens} tokens 上下文）`);
+    } catch (err) {
+      toast(err.message);
+      newBtn.disabled = false;
+      newBtn.textContent = label;
+    }
+  });
+  body.querySelectorAll('[data-sp-side]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      spChat.nodeId = btn.dataset.spSide;
+      spLastKey = '';
+      spRender();
+    });
+  });
+}
+
+/** 把一段独立会话挂进面板：自己的 SSE 流 + 自己的无头发送通道 */
+function spMountSide(body, sideNode) {
+  if (spChat.mounted === sideNode.id && body.querySelector('.sp-chat')) return;
+  spUnmountSide();
+  spChat.mounted = sideNode.id;
+  body.classList.add('sp-body-chat');
+  body.innerHTML = `
+    <div class="sp-chat">
+      <div class="sp-chat-head">
+        <span class="sp-chat-title" title="${escapeHtml(sideNode.title || '侧边对话')}">${escapeHtml(sideNode.title || '侧边对话')}</span>
+        <button type="button" class="sp-chat-new" data-sp-switch title="切换 / 新建侧边对话">↺</button>
+      </div>
+      <div class="sp-chat-list" data-sp-list></div>
+      <div class="sp-chat-status" data-sp-status hidden></div>
+      <div class="sp-chat-compose">
+        <textarea data-sp-input rows="1" placeholder="在侧边对话里问点别的…（Enter 发送）"></textarea>
+        <button type="button" class="sp-chat-send" data-sp-send>发送</button>
+      </div>
+    </div>`;
+  const listEl = body.querySelector('[data-sp-list]');
+  const statusEl = body.querySelector('[data-sp-status]');
+  const ta = body.querySelector('[data-sp-input]');
+  const sendBtn = body.querySelector('[data-sp-send]');
+
+  const nearBottom = () => listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight < 60;
+  const toBottom = () => { listEl.scrollTop = listEl.scrollHeight; };
+  const cot = createCotTimeline(listEl, {
+    node: sideNode,
+    isFirstBatch: () => false,
+    nearBottom,
+    toBottom,
+    scheduleStreamUi: () => {},
+    isTerminalRunning: () => false,
+    isHeadlessRunning: () => spChat.busy,
+    headlessElapsed: () => (spChat.busy ? Date.now() - spChat.startedAt : 0),
+    scrollEl: listEl,
+  });
+  spChat.cot = cot;
+  cot.showEmpty('侧边对话就绪，发第一条消息吧。');
+  cot.setConnected(true);
+
+  const es = new EventSource(`/api/stream?tool=${encodeURIComponent(sideNode.tool)}&file=${encodeURIComponent(sideNode.file)}&tail=120`);
+  spChat.es = es;
+  es.onmessage = (e) => {
+    let evt;
+    try { evt = JSON.parse(e.data); } catch { return; }
+    cot.setConnected(true);
+    cot.handle(evt);
+    if (nearBottom() || evt.kind === 'user') toBottom();
+  };
+  es.onerror = () => cot.setConnected(false);
+  spChat.tick = setInterval(() => cot.tick(), 500);
+
+  const setBusy = (v) => {
+    spChat.busy = v;
+    sendBtn.disabled = v;
+    sendBtn.textContent = v ? '执行中' : '发送';
+    statusEl.hidden = !v;
+    if (v) statusEl.textContent = '● AI 正在执行…';
+  };
+
+  const pollStatus = () => {
+    clearTimeout(spChat.poll);
+    const tick = async () => {
+      if (!spChat.busy) return;
+      let st = null;
+      try { st = (await api(`/api/tasks/${currentTask.id}/headless-status?nodeId=${sideNode.id}`)).status; } catch { /* 下轮再试 */ }
+      if (st && !st.running) {
+        setBusy(false);
+        if (st.canceled) toast('已取消执行');
+        else if (st.timedOut) toast('执行超时，已终止');
+        else if (st.exitCode !== 0 && st.stderrTail) toast('执行失败: ' + st.stderrTail.slice(-140));
+        cot.refresh();
+        return;
+      }
+      spChat.poll = setTimeout(tick, 2000);
+    };
+    tick();
+  };
+
+  const send = async () => {
+    const text = ta.value.trim();
+    if (!text || spChat.busy) return;
+    ta.value = '';
+    ta.style.height = 'auto';
+    spChat.startedAt = Date.now();
+    setBusy(true);
+    cot.addLocalUser(text);
+    toBottom();
+    try {
+      await api(`/api/tasks/${currentTask.id}/send-headless`, { method: 'POST', body: { nodeId: sideNode.id, message: text } });
+    } catch (err) {
+      setBusy(false);
+      cot.refresh();
+      toast(err.message);
+      return;
+    }
+    pollStatus();
+  };
+  sendBtn.addEventListener('click', send);
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  ta.addEventListener('input', () => {
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(120, ta.scrollHeight)}px`;
+  });
+  body.querySelector('[data-sp-switch]')?.addEventListener('click', () => {
+    spChat.nodeId = null;
+    spLastKey = '';
+    spRender();
+  });
+  setTimeout(() => { ta.focus(); toBottom(); }, 30);
+}
 
 /* ---------- 改动 ---------- */
 async function spRenderDiff(body, node) {

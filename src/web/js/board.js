@@ -130,7 +130,9 @@ function renderBoard() {
       ? '<span class="chip handoff" title="接力：从检查点续做的新会话">接力</span>'
       : edgeKind === 'branch'
         ? '<span class="chip branch" title="分支：原生 fork 复制当前会话（原会话不变）">分支</span>'
-        : '';
+        : edgeKind === 'side'
+          ? '<span class="chip side" title="侧边对话：基于当前会话上下文开的独立会话（原会话不变）">侧边</span>'
+          : '';
     const wtChip = /[\\/]\.sbridge-worktrees[\\/]/i.test(String(n.cwd || ''))
       ? '<span class="chip wt" title="独立 worktree 工作区">WT</span>' : '';
     const running = nodeTermFor(n) ? '<span class="run-dot" title="终端运行中"></span>' : '';
