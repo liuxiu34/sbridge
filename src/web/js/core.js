@@ -325,6 +325,19 @@ const TOOL_COMMANDS = {
 };
 const toolCommands = (tool) => TOOL_COMMANDS[tool] || [];
 
+/* 模式：只有 Claude Code / Codex 内置了计划模式与目标模式（Pi 需另装扩展，未装就不显示） */
+const TOOL_MODES = {
+  claude: [
+    ['plan', '计划模式', '先列计划、确认后再动手'],
+    ['goal', '目标模式', '设定目标，未达成前持续执行'],
+  ],
+  codex: [
+    ['plan', '计划模式', '先列计划、确认后再动手'],
+    ['goal', '目标模式', '设定目标，未达成前持续执行'],
+  ],
+};
+const toolModes = (tool) => TOOL_MODES[tool] || [];
+
 /* ---------- 输入框「＋」菜单：上传文件 / 当前工具支持的斜杠命令 ---------- */
 function openPlusMenu({ anchor, tool, stacked = false, onFiles, onCommand }) {
   if (!anchor) return;
@@ -332,15 +345,19 @@ function openPlusMenu({ anchor, tool, stacked = false, onFiles, onCommand }) {
   if (existing) existing.remove();
   const host = anchor.closest('.composer, .sp-chat-compose') || anchor.parentElement;
   if (!host) return;
+  const modes = toolModes(tool);
   const pop = document.createElement('div');
   pop.className = `attach-pop${stacked ? ' is-stacked' : ''}`;
   pop.innerHTML = `
     <button type="button" class="attach-item" data-act="files"><span class="attach-icon">${icon('plus', 14)}</span><span class="grow">上传文件</span></button>
     <button type="button" class="attach-item" data-act="cmd"><span class="attach-icon">${icon('terminal', 14)}</span><span class="grow">命令</span><span class="attach-arrow">›</span></button>
+    ${modes.length ? `<button type="button" class="attach-item" data-act="mode"><span class="attach-icon">${icon('radar', 14)}</span><span class="grow">模式</span><span class="attach-arrow">›</span></button>` : ''}
     <div class="attach-sub" hidden></div>`;
   host.appendChild(pop);
   const sub = pop.querySelector('.attach-sub');
   const cmdBtn = pop.querySelector('[data-act="cmd"]');
+  const modeBtn = pop.querySelector('[data-act="mode"]');
+  let subKind = '';
   const close = () => {
     pop.remove();
     document.removeEventListener('click', outside, true);
@@ -353,15 +370,16 @@ function openPlusMenu({ anchor, tool, stacked = false, onFiles, onCommand }) {
     document.addEventListener('keydown', onKey, true);
   }, 0);
 
-  const paintSub = () => {
-    const list = toolCommands(tool);
+  const paintSub = (kind) => {
+    subKind = kind;
+    const list = kind === 'mode' ? modes : toolCommands(tool);
     if (!list.length) {
-      sub.innerHTML = '<div class="attach-empty">这个工具没有已知的斜杠命令</div>';
+      sub.innerHTML = `<div class="attach-empty">${kind === 'mode' ? '这个工具没有内置的快捷模式' : '这个工具没有已知的斜杠命令'}</div>`;
       return;
     }
-    sub.innerHTML = list.map(([cmd, desc]) => `
+    sub.innerHTML = list.map(([cmd, ...rest]) => `
       <button type="button" class="slash-item" data-cmd="${escapeHtml(cmd)}">
-        <span class="slash-cmd">${escapeHtml(cmd)}</span><span class="slash-desc">${escapeHtml(desc)}</span>
+        <span class="slash-cmd">${escapeHtml(kind === 'mode' ? rest[0] : cmd)}</span><span class="slash-desc">${escapeHtml(kind === 'mode' ? rest[1] : rest[0])}</span>
       </button>`).join('');
     sub.querySelectorAll('[data-cmd]').forEach((b) => {
       b.addEventListener('click', (e) => {
@@ -378,13 +396,21 @@ function openPlusMenu({ anchor, tool, stacked = false, onFiles, onCommand }) {
     close();
     onFiles?.();
   });
-  cmdBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (!sub.hidden) { sub.hidden = true; cmdBtn.classList.remove('active'); return; }
-    if (!sub.childElementCount) paintSub();
+  const toggle = (kind, btn) => {
+    const other = kind === 'cmd' ? modeBtn : cmdBtn;
+    if (subKind === kind && !sub.hidden) {
+      sub.hidden = true;
+      btn.classList.remove('active');
+      subKind = '';
+      return;
+    }
+    if (subKind !== kind || !sub.childElementCount) paintSub(kind);
     sub.hidden = false;
-    cmdBtn.classList.add('active');
-  });
+    btn.classList.add('active');
+    other?.classList.remove('active');
+  };
+  cmdBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle('cmd', cmdBtn); });
+  modeBtn?.addEventListener('click', (e) => { e.stopPropagation(); toggle('mode', modeBtn); });
 }
 
 window.addEventListener('error', (e) => toast(`前端错误: ${e.message}`));
@@ -423,6 +449,7 @@ const ICONS = {
   diff: '<path d="M8 4v12"/><circle cx="8" cy="18.5" r="2"/><circle cx="16" cy="5.5" r="2"/><path d="M16 7.5v6a4 4 0 0 1-4 4h-2"/>', // 改动对比
   arrowUp: '<path d="M12 19V5"/><path d="M6 11l6-6 6 6"/>',                          // 发送
   chevronDown: '<path d="M6 9.5l6 6 6-6"/>',                                          // 下拉
+  expand: '<path d="M9 4H4v5"/><path d="M15 20h5v-5"/><path d="M4 4l6 6"/><path d="M20 20l-6-6"/>', // 放大面板
   file: '<path d="M6 3.5h7l5 5v12a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 5 20.5V5A1.5 1.5 0 0 1 6.5 3.5z"/><path d="M13 3.5V9h5" opacity=".6"/>', // 文件
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
 };

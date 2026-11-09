@@ -2045,3 +2045,46 @@ pre.mermaid:not([data-processed]) {
 /* Git 面板里只读的「最近修改文件」行 */
 .sp-file-static { cursor: default; }
 .sp-file-static:hover { background: transparent; border-color: var(--line); }
+
+/* ---------- 面板顶部：标签页 + 放大 ---------- */
+.sp-head { padding: 7px 8px; gap: 4px; }
+.sp-tabs { flex: 1 1 auto; min-width: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.sp-tabs::-webkit-scrollbar { display: none; }
+.sp-tab {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 150px;
+  height: 26px; padding: 0 7px; border-radius: 7px; border: 1px solid transparent;
+  background: transparent; color: var(--muted); font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.sp-tab:hover { background: var(--hover-soft); color: var(--text); }
+.sp-tab.active { background: var(--panel); color: var(--text); border-color: var(--line-strong); }
+.sp-tab svg { flex: none; opacity: .7; }
+.sp-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-tab-x { flex: none; width: 14px; text-align: center; border-radius: 4px; opacity: 0; }
+.sp-tab:hover .sp-tab-x, .sp-tab.active .sp-tab-x { opacity: .55; }
+.sp-tab-x:hover { opacity: 1; background: var(--line); }
+.sp-add {
+  flex: none; width: 24px; height: 24px; border-radius: 6px; border: 1px solid transparent;
+  background: transparent; color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.sp-add:hover { background: var(--hover-soft); color: var(--text); }
+.sp-head-grow { flex: none; }
+.sp-expand { width: 24px; height: 24px; }
+.sp-expand.active { background: var(--hover-soft); color: var(--text); }
+.side-panel.is-expanded { width: min(1100px, 72vw) !important; max-width: none; }
+
+/* ---------- 上下文（标准视图） ---------- */
+.sp-ctx-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.sp-ctx-title { font-size: 12.5px; font-weight: 560; color: var(--text); }
+.sp-ctx-info { color: var(--muted); font-size: 11px; cursor: help; }
+.sp-ctx-head .btn-ghost { margin-left: auto; }
+.sp-ctx-usage { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.sp-ctx-usage b { color: var(--text); }
+.sp-ctx-bar { height: 6px; border-radius: 4px; background: var(--line); overflow: hidden; margin-bottom: 10px; }
+.sp-ctx-bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.sp-seg { display: flex; gap: 2px; margin-bottom: 8px; }
+.sp-seg button {
+  border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 11.5px;
+  padding: 3px 8px; border-radius: 6px; cursor: pointer;
+}
+.sp-seg button:hover { color: var(--text); }
+.sp-seg button.active { background: var(--hover-soft); color: var(--text); }

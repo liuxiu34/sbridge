@@ -97,8 +97,10 @@
       <div class="sp-resizer" id="sp-resizer" hidden title="拖动调整面板宽度"></div>
       <aside class="side-panel" id="side-panel" hidden aria-label="右侧面板">
         <div class="sp-head">
-          <button class="sp-back" id="sp-back" hidden aria-label="返回面板列表">←</button>
-          <span class="sp-title" id="sp-title">面板</span>
+          <div class="sp-tabs" id="sp-tabs"></div>
+          <button type="button" class="sp-add" id="sp-add" title="打开面板" aria-label="打开面板">＋</button>
+          <span class="sp-head-grow"></span>
+          <button type="button" class="btn-icon sp-expand" id="sp-expand" aria-label="放大面板" title="放大面板"></button>
           <button class="btn-icon" id="sp-close" aria-label="关闭面板">×</button>
         </div>
         <div class="sp-body" id="sp-body"></div>

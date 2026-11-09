@@ -10,7 +10,8 @@ const SP_ITEMS = [
   { id: 'worktree', icon: 'git', label: 'Worktree', key: 'W', hint: '独立工作区的分支状态与合并' },
 ];
 
-const spState = { open: false, surface: null, dir: '', file: null, wtFile: null, gitFile: null, gitRefresh: false };
+const spState = { open: false, surface: null, dir: '', file: null, wtFile: null, gitFile: null, gitRefresh: false, ctxTab: 'files' };
+let spTabs = []; // 面板顶部标签：打开过的 surface，可来回切换
 let spLastKey = '';
 
 /* 侧边对话运行时状态：独立会话 + 自己的 SSE 流，面板关闭/切换时回收 */
@@ -111,19 +112,66 @@ function openSidePanel(id) {
   spState.file = null;
   spState.wtFile = null;
   spState.gitFile = null;
+  if (id && !spTabs.includes(id)) spTabs.push(id);
   spLastKey = '';
   toggleSidePanel(true);
   spRender();
 }
 
-function spBack() {
-  spState.surface = null;
-  spState.dir = '';
-  spState.file = null;
-  spState.wtFile = null;
-  spState.gitFile = null;
+/** 关闭一个面板标签；关的是当前页就退到上一个，没有标签就回到启动列表 */
+function spCloseTab(id) {
+  spTabs = spTabs.filter((t) => t !== id);
+  if (spState.surface === id) {
+    spState.surface = spTabs[spTabs.length - 1] || null;
+    spState.dir = '';
+    spState.file = null;
+    spState.wtFile = null;
+    spState.gitFile = null;
+  }
   spLastKey = '';
   spRender();
+}
+
+function spRenderTabs() {
+  const el = $('sp-tabs');
+  if (!el) return;
+  el.innerHTML = spTabs.map((id) => {
+    const it = SP_ITEMS.find((i) => i.id === id);
+    if (!it) return '';
+    return `<button type="button" class="sp-tab ${spState.surface === id ? 'active' : ''}" data-tab="${id}" title="${escapeHtml(it.hint)}">
+      ${icon(it.icon, 12)}<span class="sp-tab-label">${escapeHtml(it.label)}</span>
+      <span class="sp-tab-x" data-tab-close="${id}" title="关闭这个面板">×</span>
+    </button>`;
+  }).join('');
+  el.querySelectorAll('[data-tab]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      if (e.target.closest('[data-tab-close]')) return;
+      openSidePanel(btn.dataset.tab);
+    });
+  });
+  el.querySelectorAll('[data-tab-close]').forEach((x) => {
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      spCloseTab(x.dataset.tabClose);
+    });
+  });
+}
+
+/** 放大/还原面板宽度（不影响拖拽记住的宽度） */
+function spToggleExpand() {
+  const panel = $('side-panel');
+  const btn = $('sp-expand');
+  if (!panel || !btn) return;
+  const expanded = panel.classList.toggle('is-expanded');
+  if (expanded) {
+    panel.dataset.prevWidth = panel.style.width || '';
+    panel.style.width = '';
+  } else if (panel.dataset.prevWidth) {
+    panel.style.width = panel.dataset.prevWidth;
+  }
+  btn.classList.toggle('active', expanded);
+  btn.title = expanded ? '还原面板宽度' : '放大面板';
+  setTimeout(spRefitTerm, 60);
 }
 
 async function spRender() {
@@ -137,9 +185,7 @@ async function spRender() {
       : `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
   if (spState.surface !== 'side') spUnmountSide();
   const node = currentPanelNode();
-  const item = SP_ITEMS.find((i) => i.id === spState.surface);
-  $('sp-back').hidden = !spState.surface;
-  $('sp-title').textContent = item ? item.label : '面板';
+  spRenderTabs();
 
   if (!spState.surface) return spRenderLauncher(body);
   if (!node && spState.surface !== 'git') {
@@ -585,14 +631,60 @@ async function spRenderFiles(body, node) {
   });
 }
 
-/* ---------- 上下文 ---------- */
+/* ---------- 上下文（标准视图：用量 + 文件 / 其他） ---------- */
 async function spRenderContext(body, node) {
-  if (typeof renderCtxInto === 'function') {
-    await renderCtxInto(body, node);
-    return;
-  }
-  const data = await api(`/api/tasks/${currentTask.id}/context`);
-  body.innerHTML = `<pre class="sp-code">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+  const [usageRes, filesRes] = await Promise.all([
+    api(`/api/tasks/${currentTask.id}/nodes/${node.id}/usage`).catch(() => ({ ctx: null })),
+    api(`/api/tasks/${currentTask.id}/nodes/${node.id}/context-files`).catch(() => ({ files: [] })),
+  ]);
+  const ctx = usageRes?.ctx || null;
+  const files = filesRes?.files || [];
+  const pct = ctx?.pct ? Math.round(ctx.pct) : 0;
+  const tab = spState.ctxTab || 'files';
+  body.innerHTML = `
+    <div class="sp-ctx-head">
+      <span class="sp-ctx-title">上下文</span>
+      <span class="sp-ctx-info" title="这里看当前会话的上下文窗口占用，以及它读过/改过哪些文件">ⓘ</span>
+      <button type="button" class="btn-ghost small" data-ctx-compact ${ctx ? '' : 'disabled'}>压缩</button>
+    </div>
+    <div class="sp-ctx-usage">
+      <span>${ctx ? `${fmtTokens(ctx.used)} / ${fmtTokens(ctx.window)} tokens` : '未读到用量'}</span>
+      <b>${pct}%</b>
+    </div>
+    <div class="sp-ctx-bar"><i style="width:${Math.min(100, pct)}%"></i></div>
+    <div class="sp-seg">
+      <button type="button" data-ctx-tab="files" class="${tab === 'files' ? 'active' : ''}">文件 ${files.length}</button>
+      <button type="button" data-ctx-tab="other" class="${tab === 'other' ? 'active' : ''}">其他</button>
+    </div>
+    ${tab === 'files' ? (files.length ? `<div class="sp-list">${files.map((f) => `
+      <div class="sp-file sp-file-static" title="${escapeHtml(f.path || '')}">
+        <span class="sp-file-path">${escapeHtml(f.path || '')}</span>
+        <span class="sp-dim">${f.ops > 1 ? `${f.ops} 次` : ''}</span>
+      </div>`).join('')}</div>` : '<div class="sp-empty">这个会话还没有读写过文件</div>')
+      : `<div class="sp-kv"><span>消息</span><b>${node.summary?.messageCount || 0}</b><span>轮次</span><b>${node.summary?.turnCount || 0}</b></div>
+         <div class="sp-kv"><span>模型</span><b>${escapeHtml(ctx?.model || node.model || '—')}</b></div>
+         <div class="sp-kv"><span>工具</span><b>${escapeHtml(toolLabel(node.tool))}</b></div>
+         <div class="sp-kv"><span>会话</span><code class="sp-path">${escapeHtml(node.sessionId || '')}</code></div>`}
+  `;
+  body.querySelectorAll('[data-ctx-tab]').forEach((b) => {
+    b.addEventListener('click', () => {
+      spState.ctxTab = b.dataset.ctxTab;
+      spLastKey = '';
+      spRender();
+    });
+  });
+  body.querySelector('[data-ctx-compact]')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/compact`, { method: 'POST', body: {} });
+      toast('已在终端里执行 /compact');
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 }
 
 /* ---------- Git（项目级完整视图） ---------- */
@@ -784,6 +876,19 @@ async function spRenderWorktree(body, node) {
 function initSidePanel() {
   $('btn-panel')?.addEventListener('click', () => toggleSidePanel());
   $('sp-close')?.addEventListener('click', () => toggleSidePanel(false));
-  $('sp-back')?.addEventListener('click', spBack);
+  $('sp-add')?.addEventListener('click', () => {
+    spState.surface = null;
+    spState.dir = '';
+    spState.file = null;
+    spState.wtFile = null;
+    spState.gitFile = null;
+    spLastKey = '';
+    spRender();
+  });
+  const expandBtn = $('sp-expand');
+  if (expandBtn) {
+    expandBtn.innerHTML = icon('expand', 14);
+    expandBtn.addEventListener('click', spToggleExpand);
+  }
   initSideResizer();
 }
