@@ -229,17 +229,30 @@ function mermaidConfig() {
     securityLevel: 'strict',
     theme: 'base',
     fontFamily: getComputedStyle(document.body).fontFamily || 'sans-serif',
+    flowchart: { curve: 'basis', padding: 10, nodeSpacing: 40, rankSpacing: 50, diagramPadding: 6, useMaxWidth: true },
+    pie: { useMaxWidth: true, textPosition: 0.62 },
+    themeCSS: `
+      .background { fill: transparent !important; }
+      .node rect, .node polygon, .node circle, .node ellipse { rx: 10px; ry: 10px; stroke-width: 1.2px; }
+      .cluster rect { rx: 12px; }
+      .edgePath path { stroke-width: 1.3px; }
+      .label { font-weight: 500; }
+      .pieTitleText { font-size: 16px !important; font-weight: 600; }
+      .pieSliceText { font-size: 12px !important; }
+      .pieLegendText { font-size: 12px !important; }
+    `,
     themeVariables: {
-      background: css('--panel', dark ? '#191a1d' : '#ffffff'),
+      background: 'transparent',
+      fontSize: '15px',
       primaryColor: css('--accent-soft', dark ? '#26263a' : '#efedfb'),
       primaryTextColor: css('--text', dark ? '#e8e6e1' : '#1c1b19'),
-      primaryBorderColor: css('--line-strong', dark ? '#3a3b40' : '#dcd8cf'),
-      lineColor: css('--muted', dark ? '#9a978f' : '#74726b'),
+      primaryBorderColor: css('--accent', dark ? '#8b87f0' : '#5b5bd6'),
+      lineColor: css('--line-strong', dark ? '#3a3b40' : '#dcd8cf'),
       textColor: css('--text', dark ? '#e8e6e1' : '#1c1b19'),
       secondaryColor: css('--card', dark ? '#1e1f23' : '#ffffff'),
       tertiaryColor: css('--bg', dark ? '#111214' : '#f7f5f1'),
-      mainBkg: css('--card', dark ? '#1e1f23' : '#ffffff'),
-      nodeBorder: css('--line-strong', dark ? '#3a3b40' : '#dcd8cf'),
+      mainBkg: css('--accent-soft', dark ? '#26263a' : '#efedfb'),
+      nodeBorder: css('--accent', dark ? '#8b87f0' : '#5b5bd6'),
       clusterBkg: css('--panel', dark ? '#191a1d' : '#fffefb'),
       clusterBorder: css('--line', dark ? '#2a2b2f' : '#e9e6df'),
       edgeLabelBackground: css('--panel', dark ? '#191a1d' : '#fffefb'),
@@ -255,7 +268,7 @@ function mermaidConfig() {
       pieLegendTextColor: css('--text', dark ? '#e8e6e1' : '#1c1b19'),
       pieStrokeColor: css('--panel', dark ? '#191a1d' : '#fffefb'),
       pieStrokeWidth: '2px',
-      pieOpacity: '0.92',
+      pieOpacity: '0.9',
     },
   };
 }
