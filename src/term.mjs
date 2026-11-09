@@ -68,7 +68,9 @@ export function tailTextForNode(nodeId, maxChars = 16000) {
 export function spawnTerm({ tool, cwd, command, label, replay, nodeId }) {
   const { spawn: ptySpawn } = getPty();
   const id = `t${Date.now().toString(36)}${(++seq).toString(36)}`;
-  const shell = process.env.COMSPEC || 'powershell.exe';
+  // Windows 用 cmd/ConPTY；Linux/macOS 用用户 shell（bash/zsh）
+  const isWin = process.platform === 'win32';
+  const shell = isWin ? (process.env.COMSPEC || 'powershell.exe') : (process.env.SHELL || '/bin/bash');
   // Pi 的全屏 TUI 模式（默认）在 resume 时不回放历史对话，屏幕上只有启动横幅；
   // regular 行式模式会把历史对话逐行打印出来（实测 195KB 历史正常显示）。
   // 给 pi 的启动命令统一补上 --tui-mode regular（已有该参数则不重复）。
@@ -76,8 +78,9 @@ export function spawnTerm({ tool, cwd, command, label, replay, nodeId }) {
   if (tool === 'pi' && /^pi\b/.test(cmd) && !cmd.includes('--tui-mode')) {
     cmd = cmd.replace(/^pi\b/, 'pi --tui-mode regular');
   }
-  // 用 cmd.exe /c 承接完整命令行，保留交互 TUI 能力由 ConPTY 提供
-  const p = ptySpawn(shell, ['/d', '/s', '/c', cmd], {
+  // 用 cmd.exe /c（Windows）或 shell -c（POSIX）承接完整命令行，保留交互 TUI 能力
+  const shellArgs = isWin ? ['/d', '/s', '/c', cmd] : ['-c', cmd];
+  const p = ptySpawn(shell, shellArgs, {
     name: 'xterm-256color',
     cols: 100,
     rows: 30,
@@ -171,10 +174,11 @@ export function killAll(tool = null) {
 export function killTerm(id) {
   const t = terms.get(id);
   if (t && t.exitCode === null) {
-    // PTY 是 cmd /c 包裹启动的：pty.kill() 只杀 cmd 壳，pi/codex 孙进程会变孤儿继续跑。
-    // 用 taskkill /T 连整棵进程树一起杀；失败再退回 pty.kill() 兜底。
+    // PTY 是 shell 包裹启动的：pty.kill() 在 Windows 只杀 cmd 壳，pi/codex 孙进程会变孤儿。
+    // Windows 用 taskkill /T 杀整棵树；POSIX 用负 PID 杀整个进程组（forkpty 的子进程是会话首进程）。
     try {
-      execSync(`taskkill /PID ${t.pty.pid} /T /F`, { stdio: 'ignore' });
+      if (process.platform === 'win32') execSync(`taskkill /PID ${t.pty.pid} /T /F`, { stdio: 'ignore' });
+      else process.kill(-t.pty.pid, 'SIGKILL');
     } catch {
       try { t.pty.kill(); } catch { /* 已退出 */ }
     }

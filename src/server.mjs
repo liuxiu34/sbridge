@@ -30,10 +30,14 @@ const LAUNCH_COMMANDS = { codex: 'codex', pi: 'pi', claude: 'claude' };
 // 目录比较用：大小写、斜杠、尾斜杠不敏感
 const normDir = (p) => String(p || '').replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
 
-/** 杀掉整棵进程树：Windows 下 PTY/无头命令都是 cmd 包裹，只 kill 壳会留下孤儿进程 */
+/** 杀掉整棵进程树：Windows 下 PTY/无头命令都是 cmd 包裹，只 kill 壳会留下孤儿进程；
+ *  POSIX 下 forkpty 的子进程是会话首进程，用负 PID 连进程组一起杀。 */
 function killProcessTree(pid) {
   if (!pid) return;
-  try { execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' }); } catch { /* 已退出 */ }
+  try {
+    if (process.platform === 'win32') execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
+    else process.kill(-pid, 'SIGKILL');
+  } catch { /* 已退出 */ }
 }
 
 /** 搜索命中片段：压缩空白后取命中位置前后各 radius 个字符 */
@@ -875,6 +879,11 @@ if (req.method === 'GET' && resource === 'stream') {
       // 在独立终端窗口启动交互式会话，工作目录即任务目录
       try {
         const cmd = LAUNCH_COMMANDS[body.tool] || body.tool;
+        // Linux/macOS 没有可靠的通用「弹终端」命令：直接退回内嵌终端，能力一致
+        if (process.platform !== 'win32') {
+          const term = termmod.spawnTerm({ tool: body.tool, cwd: runCwd, command: cmd, label: `${TOOL_LABELS[body.tool]} · 新会话` });
+          return json(res, 200, { ok: true, cwd: runCwd, worktree, since: new Date().toISOString(), termId: term.id, embedded: true });
+        }
         spawn(`start "sbridge" powershell -NoExit -Command "${cmd}"`, {
           shell: true, cwd: runCwd, detached: true, stdio: 'ignore',
         }).unref();
@@ -1387,7 +1396,7 @@ function writeCheckpointSession(to, ctxTaskId, rendered, targetCwd, version, { l
     const replay = null;
     const term = termmod.spawnTerm({ tool: to.name, cwd: targetCwd, command: result.resumeCommand, label: `检查点 v${version} · ${to.name}`, replay, nodeId: body.nodeId || null });
     termId = term.id;
-  } else if (launch && result.resumeCommand) {
+  } else if (launch && result.resumeCommand && process.platform === 'win32') {
     try {
       // 统一用适配器返回的恢复命令拉起（codex resume / pi --session / claude --resume）
       spawn(`start "sbridge" powershell -NoExit -Command "${result.resumeCommand}"`, {
@@ -1418,7 +1427,9 @@ function boardSessions(db, boardTaskId) {
 
 function openBrowser(port = PORT) {
   try {
-    spawn(`start "" "http://127.0.0.1:${port}"`, { shell: true, detached: true, stdio: 'ignore' }).unref();
+    const url = `http://127.0.0.1:${port}`;
+    if (process.platform === 'win32') spawn(`start "" "${url}"`, { shell: true, detached: true, stdio: 'ignore' }).unref();
+    else spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
   } catch { /* 打不开就让用户手动访问 */ }
 }
 

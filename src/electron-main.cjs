@@ -16,10 +16,14 @@ let quitting = false;     // 区分「关窗最小化」与「真退出」
 let bootT0 = Date.now();
 
 const isPackaged = app.isPackaged;
-// 服务 exe：打包后在 resources/sbridge/，开发时在项目 dist/
+const IS_WIN = process.platform === 'win32';
+// 服务程序：Windows 是 .exe，Linux/macOS 是 ELF/Mach-O 可执行文件
+const svcName = IS_WIN ? 'sbridge.exe' : 'sbridge';
 const svcExe = isPackaged
-  ? path.join(process.resourcesPath, 'sbridge', 'sbridge.exe')
-  : path.join(__dirname, '..', 'dist', 'sbridge.exe');
+  ? path.join(process.resourcesPath, 'sbridge', svcName)
+  : path.join(__dirname, '..', 'dist', svcName);
+// 窗口/托盘图标：Windows 用 .ico，Linux 用 png
+const appIcon = path.join(__dirname, IS_WIN ? 'icon.ico' : 'icon.png');
 
 /* 启动闪屏：先出窗口再等后端，避免双击后 1-2 秒没有任何反应 */
 const SPLASH_URL = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html>
@@ -159,7 +163,7 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: '#f7f5f1',
     title: 'sbridge · 会话接力工作台',
-    icon: path.join(__dirname, 'icon.ico'),
+    icon: appIcon,
     autoHideMenuBar: true,
     show: true,
     webPreferences: {
@@ -182,13 +186,14 @@ function createWindow() {
 }
 
 function createTray() {
-  tray = new Tray(path.join(__dirname, 'icon.ico'));
+  tray = new Tray(appIcon);
   const menu = Menu.buildFromTemplate([
     { label: '显示工作台', click: () => { win ? win.show() : createWindow(); } },
     { label: '服务状态：运行中', enabled: false },
     { type: 'separator' },
     { label: '检查更新', click: () => checkUpdate(false) },
     { label: '开机自动启动', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
+      enabled: IS_WIN || process.platform === 'darwin',
       click: (item) => { app.setLoginItemSettings({ openAtLogin: item.checked, path: process.execPath }); } },
     { type: 'separator' },
     { label: '退出 sbridge', click: () => { quitting = true; app.quit(); } },
