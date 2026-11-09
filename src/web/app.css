@@ -2088,3 +2088,7 @@ pre.mermaid:not([data-processed]) {
 }
 .sp-seg button:hover { color: var(--text); }
 .sp-seg button.active { background: var(--hover-soft); color: var(--text); }
+
+/* 侧边对话头部：历史会话按钮（图标按钮，和刷新区分开） */
+.sp-chat-new { display: inline-flex; align-items: center; justify-content: center; }
+.sp-chat-new svg { display: block; }
