@@ -173,6 +173,64 @@ function toast(message) {
   toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
 }
 
+/* ---------- 引用本地文件：桌面版弹系统文件框拿绝对路径，浏览器里上传到数据目录 ---------- */
+const fileToBase64 = (file) => new Promise((resolve, reject) => {
+  const fr = new FileReader();
+  fr.onload = () => resolve(String(fr.result || '').split(',')[1] || '');
+  fr.onerror = () => reject(new Error('读取文件失败'));
+  fr.readAsDataURL(file);
+});
+
+/** 让用户选本地文件，返回绝对路径数组（取消时返回空数组） */
+function pickLocalFiles() {
+  const bridge = window.sbridgeFiles;
+  if (bridge && typeof bridge.pick === 'function') {
+    try { return Promise.resolve(bridge.pick()).then((list) => (Array.isArray(list) ? list : [])); }
+    catch { return Promise.resolve([]); }
+  }
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(input);
+    let settled = false;
+    const finish = (list) => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      resolve(list);
+    };
+    input.addEventListener('change', async () => {
+      const files = [...(input.files || [])];
+      if (!files.length) return finish([]);
+      const paths = [];
+      for (const f of files) {
+        try {
+          const data = await fileToBase64(f);
+          const r = await api('/api/upload', { method: 'POST', body: { name: f.name, data } });
+          if (r.path) paths.push(r.path);
+        } catch { toast(`文件引用失败: ${f.name}`); }
+      }
+      finish(paths);
+    });
+    // 取消选择不会触发 change：窗口重新聚焦后兜底收尾
+    window.addEventListener('focus', () => setTimeout(() => { if (!settled) finish([]); }, 800), { once: true });
+    input.click();
+  });
+}
+
+/** 把文件路径插进输入框末尾（agent 拿到路径就能自己读） */
+function appendFileRefs(ta, paths) {
+  if (!ta || !paths || !paths.length) return;
+  const block = paths.map((p) => `文件：${p}`).join('\n');
+  const value = String(ta.value || '');
+  ta.value = `${value}${value && !/\n$/.test(value) ? '\n' : ''}${block}\n`;
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  ta.focus();
+  try { const end = ta.value.length; ta.setSelectionRange(end, end); } catch { /* ignore */ }
+}
+
 window.addEventListener('error', (e) => toast(`前端错误: ${e.message}`));
 window.addEventListener('unhandledrejection', (e) => toast(`前端错误: ${e.reason?.message || e.reason}`));
 

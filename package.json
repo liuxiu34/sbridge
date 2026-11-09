@@ -44,6 +44,7 @@
     "afterPack": "scripts/after-pack.cjs",
     "files": [
       "src/electron-main.cjs",
+      "src/preload.cjs",
       "src/icon.ico",
       "src/icon.png",
       "package.json"

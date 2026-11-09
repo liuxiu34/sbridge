@@ -35,28 +35,71 @@ function refreshSidePanel(force = false) {
   spRender();
 }
 
+/** 面板宽度变化后，让当前终端的 xterm 重新量尺寸（refit 内部只在终端视图生效） */
+function spRefitTerm() {
+  const id = activeTabId || layout?.slots?.[0];
+  const handle = id && typeof paneHandles !== 'undefined' ? paneHandles.get(id) : null;
+  try { handle?.refit(); } catch { /* ignore */ }
+}
+
+const SP_WIDTH_KEY = 'sbridge-side-width';
+const SP_WIDTH_MIN = 260;
+const spMaxWidth = () => Math.min(760, Math.max(SP_WIDTH_MIN, Math.round(window.innerWidth * 0.62)));
+
+/** 拖动分隔条调整右侧面板宽度（记在本地，下次打开沿用） */
+function initSideResizer() {
+  const bar = $('sp-resizer');
+  const panel = $('side-panel');
+  if (!bar || !panel) return;
+  const saved = Number(localStorage.getItem(SP_WIDTH_KEY) || 0);
+  if (saved >= SP_WIDTH_MIN) panel.style.width = `${Math.min(saved, spMaxWidth())}px`;
+  bar.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    bar.classList.add('dragging');
+    try { bar.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    const startX = e.clientX;
+    const startW = panel.getBoundingClientRect().width;
+    let raf = 0;
+    const move = (ev) => {
+      const next = Math.max(SP_WIDTH_MIN, Math.min(spMaxWidth(), Math.round(startW - (ev.clientX - startX))));
+      panel.style.width = `${next}px`;
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; spRefitTerm(); });
+    };
+    const up = () => {
+      bar.classList.remove('dragging');
+      bar.removeEventListener('pointermove', move);
+      bar.removeEventListener('pointerup', up);
+      bar.removeEventListener('pointercancel', up);
+      try { localStorage.setItem(SP_WIDTH_KEY, String(Math.round(panel.getBoundingClientRect().width))); } catch { /* ignore */ }
+      spRefitTerm();
+    };
+    bar.addEventListener('pointermove', move);
+    bar.addEventListener('pointerup', up);
+    bar.addEventListener('pointercancel', up);
+  });
+}
+
 function toggleSidePanel(force) {
   const panel = $('side-panel');
   if (!panel) return;
   const want = force === undefined ? !spState.open : !!force;
   spState.open = want;
   panel.hidden = !want;
+  const bar = $('sp-resizer');
+  if (bar) bar.hidden = !want;
   const btn = $('btn-panel');
   btn?.classList.toggle('active', want);
   btn?.setAttribute('aria-pressed', String(want));
   if (want) {
+    const savedW = Number(localStorage.getItem(SP_WIDTH_KEY) || 0);
+    panel.style.width = `${Math.min(savedW >= SP_WIDTH_MIN ? savedW : 320, spMaxWidth())}px`;
     spLastKey = '';
     spRender();
   } else {
     spUnmountSide();
     $('sp-body')?.classList.remove('sp-body-chat');
   }
-  // 面板改变 pane 宽度：让当前终端的 xterm 重新量尺寸（refit 内部只在终端视图生效）
-  setTimeout(() => {
-    const id = activeTabId || layout?.slots?.[0];
-    const handle = id && typeof paneHandles !== 'undefined' ? paneHandles.get(id) : null;
-    try { handle?.refit(); } catch { /* ignore */ }
-  }, 60);
+  setTimeout(spRefitTerm, 60);
 }
 
 function openSidePanel(id) {
@@ -147,6 +190,7 @@ function spUnmountSide() {
   if (spChat.es) { try { spChat.es.close(); } catch { /* ignore */ } spChat.es = null; }
   clearInterval(spChat.tick); spChat.tick = 0;
   clearTimeout(spChat.poll); spChat.poll = 0;
+  $('sp-body')?.querySelectorAll('.model-pop').forEach((el) => el.remove());
   spChat.cot = null;
   spChat.busy = false;
   spChat.mounted = '';
@@ -207,11 +251,15 @@ function spMountSide(body, sideNode) {
     <div class="sp-chat">
       <div class="sp-chat-head">
         <span class="sp-chat-title" title="${escapeHtml(sideNode.title || '侧边对话')}">${escapeHtml(sideNode.title || '侧边对话')}</span>
+        <button type="button" class="sp-chat-model" data-sp-model title="切换这个侧边会话的模型">
+          <span data-sp-modelname>模型</span>${icon('chevronDown', 10)}
+        </button>
         <button type="button" class="sp-chat-new" data-sp-switch title="切换 / 新建侧边对话">↺</button>
       </div>
       <div class="sp-chat-list" data-sp-list></div>
       <div class="sp-chat-status" data-sp-status hidden></div>
       <div class="sp-chat-compose">
+        <button type="button" class="sp-chat-attach" data-sp-attach title="引用本地文件">＋</button>
         <textarea data-sp-input rows="1" placeholder="在侧边对话里问点别的…（Enter 发送）"></textarea>
         <button type="button" class="sp-chat-send" data-sp-send>发送</button>
       </div>
@@ -220,6 +268,7 @@ function spMountSide(body, sideNode) {
   const statusEl = body.querySelector('[data-sp-status]');
   const ta = body.querySelector('[data-sp-input]');
   const sendBtn = body.querySelector('[data-sp-send]');
+  const attachBtn = body.querySelector('[data-sp-attach]');
 
   const nearBottom = () => listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight < 60;
   const toBottom = () => { listEl.scrollTop = listEl.scrollHeight; };
@@ -249,6 +298,97 @@ function spMountSide(body, sideNode) {
   };
   es.onerror = () => cot.setConnected(false);
   spChat.tick = setInterval(() => cot.tick(), 500);
+
+  /* 模型：和主对话共用接口（数据源就是各 CLI 自己的配置），切换只影响这条侧边会话 */
+  const modelBtn = body.querySelector('[data-sp-model]');
+  const modelNameEl = body.querySelector('[data-sp-modelname]');
+  const chatEl = body.querySelector('.sp-chat');
+  const shortModel = (s) => String(s || '').replace(/\[[^\]]+\]$/, '');
+  const modelSyncOn = () => userSettings.syncModel !== false;
+  let modelPop = null;
+  let modelData = { current: '', options: [] };
+  const closeModelPop = () => { if (modelPop) { modelPop.remove(); modelPop = null; } };
+  const setModelLabel = (m) => {
+    if (!modelNameEl) return;
+    modelNameEl.textContent = shortModel(m) || '模型';
+    if (modelBtn) modelBtn.title = m ? `当前模型：${m}（点击切换）` : '切换这个侧边会话的模型';
+  };
+  const loadModel = async () => {
+    try {
+      const d = await api(`/api/tasks/${currentTask.id}/nodes/${sideNode.id}/model?sync=${modelSyncOn() ? 1 : 0}`);
+      modelData = d;
+      setModelLabel(d.current);
+    } catch { /* 读不到就保持原样 */ }
+  };
+  const applyModel = async (opt) => {
+    if (!opt) return;
+    closeModelPop();
+    try {
+      const r = await api(`/api/tasks/${currentTask.id}/nodes/${sideNode.id}/model`, {
+        method: 'POST',
+        body: { model: opt.id, provider: opt.provider || null, sync: modelSyncOn() },
+      });
+      modelData.current = opt.id;
+      setModelLabel(opt.id);
+      toast(r.applied === 'term'
+        ? `已切换模型：${shortModel(opt.id)}（终端已同步）`
+        : `已切换模型：${shortModel(opt.id)}（下条消息生效）`);
+    } catch (err) { toast(err.message); }
+  };
+  const openModelPop = async () => {
+    if (modelPop) { closeModelPop(); return; }
+    await loadModel();
+    modelPop = document.createElement('div');
+    modelPop.className = 'model-pop is-down';
+    modelPop.innerHTML = `
+      <input class="model-search" data-role="spmodelsearch" placeholder="搜索模型…" autocomplete="off" />
+      <div class="model-list" data-role="spmodellist"></div>
+      <div class="model-foot">${modelSyncOn() ? '与终端同步：开' : '与终端同步：关（在设置里改）'}</div>`;
+    chatEl.appendChild(modelPop);
+    const listEl2 = modelPop.querySelector('[data-role="spmodellist"]');
+    const input = modelPop.querySelector('[data-role="spmodelsearch"]');
+    const paint = (q) => {
+      const kw = String(q || '').trim().toLowerCase();
+      const opts = (modelData.options || []).filter((o) => !kw
+        || String(o.id).toLowerCase().includes(kw)
+        || String(o.label || '').toLowerCase().includes(kw));
+      listEl2.innerHTML = opts.length ? opts.slice(0, 200).map((o, i) => `
+        <button type="button" class="model-item ${o.id === modelData.current ? 'active' : ''}" data-mi="${i}">
+          <span class="model-item-label">${escapeHtml(o.label || o.id)}</span>
+          <span class="model-item-note">${escapeHtml(o.note || '')}</span>
+        </button>`).join('') : '<div class="model-empty">没有匹配的模型</div>';
+      listEl2.querySelectorAll('[data-mi]').forEach((b) => {
+        b.onclick = () => applyModel(opts[Number(b.dataset.mi)]);
+      });
+    };
+    paint('');
+    input.addEventListener('input', () => paint(input.value));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); closeModelPop(); }
+    });
+    input.focus();
+    setTimeout(() => {
+      const outside = (e) => {
+        if (modelPop && !modelPop.contains(e.target) && !modelBtn.contains(e.target)) closeModelPop();
+      };
+      document.addEventListener('click', outside, { once: true });
+    }, 0);
+  };
+  modelBtn?.addEventListener('click', (e) => { e.stopPropagation(); openModelPop(); });
+  loadModel();
+
+  /* 引用本地文件：桌面版弹系统文件框拿真实路径，浏览器里上传到数据目录再给路径 */
+  attachBtn?.addEventListener('click', async () => {
+    if (attachBtn.disabled) return;
+    attachBtn.disabled = true;
+    try {
+      const paths = await pickLocalFiles();
+      if (paths.length) {
+        appendFileRefs(ta, paths);
+        toast(`已引用 ${paths.length} 个文件`);
+      }
+    } finally { attachBtn.disabled = false; }
+  });
 
   const setBusy = (v) => {
     spChat.busy = v;
@@ -471,4 +611,5 @@ function initSidePanel() {
   $('btn-panel')?.addEventListener('click', () => toggleSidePanel());
   $('sp-close')?.addEventListener('click', () => toggleSidePanel(false));
   $('sp-back')?.addEventListener('click', spBack);
+  initSideResizer();
 }

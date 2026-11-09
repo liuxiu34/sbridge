@@ -79,6 +79,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         <div class="composer">
           <textarea rows="1" data-role="input" placeholder="问点什么，或直接描述任务…（Enter 发送，Shift+Enter 换行）"></textarea>
           <div class="composer-bar">
+            <button type="button" class="btn-attach" data-role="attach" title="引用本地文件">＋</button>
             <span class="composer-note" data-role="checkout"></span>
             <span class="composer-grow"></span>
             <button type="button" class="model-btn" data-role="model" title="切换这个会话使用的模型">
@@ -554,6 +555,19 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   if (active) {
     const ta = host.querySelector('[data-role="input"]');
     const btn = host.querySelector('[data-role="send"]');
+    // 引用本地文件：把绝对路径插进输入框，agent 自己会读
+    const attachBtn = host.querySelector('[data-role="attach"]');
+    attachBtn?.addEventListener('click', async () => {
+      if (attachBtn.disabled) return;
+      attachBtn.disabled = true;
+      try {
+        const paths = await pickLocalFiles();
+        if (paths.length) {
+          appendFileRefs(ta, paths);
+          toast(`已引用 ${paths.length} 个文件`);
+        }
+      } finally { attachBtn.disabled = false; }
+    });
     /* 斜杠命令菜单 + 历史命令（PgUp/PgDn）：让工作轨迹输入框的手感对齐终端。
        命令表是静态精选（CLI 的完整清单未暴露 API；菜单只做辅助，手输任意命令照常发送）。 */
     const SLASH_COMMANDS = {

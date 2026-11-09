@@ -298,6 +298,27 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && resource === 'state') return json(res, 200, buildState(db));
 
+  /* 引用本地文件（浏览器降级路径）：桌面版走系统文件框拿真实路径，浏览器里把文件存到数据目录再给路径 */
+  if (req.method === 'POST' && resource === 'upload') {
+    const body = await readBody(req);
+    const name = path.basename(String(body.name || 'file')).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(-80) || 'file';
+    const data = String(body.data || '');
+    if (!data) return json(res, 400, { error: '文件内容为空' });
+    let buf;
+    try { buf = Buffer.from(data, 'base64'); } catch { return json(res, 400, { error: '文件内容不是合法 base64' }); }
+    if (!buf.length) return json(res, 400, { error: '文件内容为空' });
+    if (buf.length > 25 * 1024 * 1024) return json(res, 400, { error: '文件超过 25MB，请放到项目目录里直接引用路径' });
+    try {
+      const dir = path.join(DATA_DIR, 'uploads');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${Date.now()}-${name}`);
+      fs.writeFileSync(file, buf);
+      return json(res, 200, { ok: true, path: file, size: buf.length });
+    } catch (err) {
+      return json(res, 500, { error: `保存文件失败: ${err.message}` });
+    }
+  }
+
   if (req.method === 'GET' && resource === 'tools') {
     return json(res, 200, { tools: Object.keys(TOOLS).map((id) => ({ id, label: TOOL_LABELS[id] || id })) });
   }

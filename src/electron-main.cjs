@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, shell, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, dialog, ipcMain } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -170,6 +170,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: false,
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   });
   // 先显示闪屏：窗口立刻出现，后端就绪后再加载真实页面
@@ -210,6 +211,16 @@ app.whenReady().then(async () => {
   app.on('second-instance', () => { if (win) { win.show(); win.focus(); } else createWindow(); });
 
   bootT0 = Date.now();
+  // 引用本地文件：页面通过 preload 调这里弹系统文件框，返回绝对路径
+  ipcMain.handle('sbridge:pick-files', async () => {
+    try {
+      const r = await dialog.showOpenDialog(win, {
+        title: '选择要引用的文件',
+        properties: ['openFile', 'multiSelections'],
+      });
+      return r.canceled ? [] : r.filePaths;
+    } catch { return []; }
+  });
   createWindow();          // 立刻出闪屏，不用等后端
   startService();
   const ready = await waitForService();
