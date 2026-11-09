@@ -67,6 +67,7 @@
           </div>
         </span>
       </div>
+      <button class="btn-ghost" id="btn-panel" aria-pressed="false" title="面板（Ctrl+B）：改动 / 文件 / 上下文 / Worktree">⋯</button>
       <button class="btn-ghost theme-toggle" id="btn-theme" title="切换浅色 / 深色主题">🌙</button>
     </header>
 
@@ -92,6 +93,15 @@
           <p>点侧栏「会话链」里的卡片，或「新开会话 / 接入已有会话」。<br />agent 面板会在这里打开：结构化动态 + 直接输入，关页面不中断。</p>
         </div>
       </div>
+      <!-- 右侧面板：内容跟随当前聚焦会话，和工作轨迹/终端切换互不影响 -->
+      <aside class="side-panel" id="side-panel" hidden aria-label="右侧面板">
+        <div class="sp-head">
+          <button class="sp-back" id="sp-back" hidden aria-label="返回面板列表">←</button>
+          <span class="sp-title" id="sp-title">面板</span>
+          <button class="btn-icon" id="sp-close" aria-label="关闭面板">×</button>
+        </div>
+        <div class="sp-body" id="sp-body"></div>
+      </aside>
     </section>
   </main>
 </div>
@@ -121,6 +131,7 @@
     <script src="/js/tasks.js"></script>
     <script src="/js/modals.js"></script>
     <script src="/js/handoff.js"></script>
+    <script src="/js/sidepanel.js"></script>
     <script src="/js/actions.js"></script>
     <script src="/app.js"></script>
 </body>

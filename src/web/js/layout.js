@@ -128,6 +128,8 @@ function renderTabs() {
   // 侧栏高亮跟顶部标签同源（activeTabId/slots）——挂在这里保证打开/关闭/切换标签时
   // 左侧会话链立刻跟上。此前只在全量 render() 里刷新，点卡片切换时侧栏高亮慢几拍。
   renderMiniChain();
+  // 右侧面板跟随当前聚焦会话（面板未打开时内部直接 return）
+  if (typeof refreshSidePanel === 'function') refreshSidePanel();
 }
 
 function renderPanes() {

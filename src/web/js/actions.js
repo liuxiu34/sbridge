@@ -10,6 +10,18 @@ document.addEventListener('keydown', (e) => {
     openSearchModal();
   }
 });
+// Ctrl/Cmd+B 开关右侧面板；Esc 在无弹窗时收起面板
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
+    e.preventDefault();
+    toggleSidePanel();
+    return;
+  }
+  if (e.key === 'Escape' && sidePanelOpen() && $('modal').hidden) {
+    toggleSidePanel(false);
+  }
+});
+function sidePanelOpen() { return !$('side-panel').hidden; }
 // btn-new-project / btn-tree-toggle 在 renderTree 的 group-label 里（每次重渲染重建），用委托绑定
 $('tree').addEventListener('click', (e) => {
   if (e.target.closest('#btn-new-project')) { createProjectFlow(); return; }
