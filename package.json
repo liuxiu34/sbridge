@@ -50,14 +50,6 @@
     ],
     "extraResources": [
       {
-        "from": "dist",
-        "to": "sbridge",
-        "filter": [
-          "sbridge.exe",
-          "sbridge"
-        ]
-      },
-      {
         "from": "dist/node_modules",
         "to": "sbridge/node_modules"
       }
@@ -66,7 +58,16 @@
       "target": [
         "nsis"
       ],
-      "icon": "src/icon.ico"
+      "icon": "src/icon.ico",
+      "extraResources": [
+        {
+          "from": "dist",
+          "to": "sbridge",
+          "filter": [
+            "sbridge.exe"
+          ]
+        }
+      ]
     },
     "linux": {
       "target": [
@@ -75,7 +76,16 @@
       ],
       "category": "Development",
       "icon": "icon.png",
-      "artifactName": "sbridge-${version}-${arch}.${ext}"
+      "artifactName": "sbridge-${version}-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "dist",
+          "to": "sbridge",
+          "filter": [
+            "sbridge"
+          ]
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
