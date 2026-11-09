@@ -144,8 +144,8 @@ html, body {
 .btn-ghost.danger { color: var(--danger); }
 .btn-ghost.danger:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
 
-/* 主题切换按钮：固定在顶栏最右 */
-.theme-toggle { font-size: 15px; line-height: 1; padding: 6px 10px; flex: none; }
+/* 主题切换按钮：侧栏左下角，「设置」旁边（foot-row 里两个按钮均分宽度） */
+.theme-toggle { line-height: 1; }
 
 .btn-icon {
   border: 0; background: transparent; color: var(--muted);
