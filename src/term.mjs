@@ -152,6 +152,25 @@ export function attachTerm(id, ws) {
   return term;
 }
 
+/** 该会话节点当前正在运行的终端（没有就返回 null） */
+export function runningTermForNode(nodeId) {
+  if (!nodeId) return null;
+  for (const [, t] of terms) {
+    if (t.nodeId === nodeId && t.exitCode === null) return t;
+  }
+  return null;
+}
+
+/** 往节点终端里写一行指令（用于 /model 这类 TUI 命令）；没有运行中的终端返回 false */
+export function writeToNode(nodeId, text) {
+  const t = runningTermForNode(nodeId);
+  if (!t) return false;
+  try {
+    t.pty.write(String(text).replace(/[\r\n]+$/g, '') + '\r');
+    return true;
+  } catch { return false; }
+}
+
 /** 清理已退出的终端记录（保留 1 小时后可清，避免无限累积） */
 export function pruneTerms(maxIdleMs = 3600_000) {
   const now = Date.now();
