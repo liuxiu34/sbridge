@@ -18,7 +18,7 @@ import { applyBudget, summarize } from './model.mjs';
 import * as termmod from './term.mjs';
 import { renderTranscript } from './transcript.mjs';
 import { ensureSubagentProtocols } from './subagent-protocol.mjs';
-import { maybeCreateWorktree } from './worktree.mjs';
+import { maybeCreateWorktree, isSbridgeWorktree, worktreeInfo, mergeWorktree } from './worktree.mjs';
 import { scanProjectState, scanProjectTruth, renderProjectTruth } from './project-scan.mjs';
 import { expandPath, samePath, truncate, estimateTokens } from './util.mjs';
 import { IS_SEA, ROOT, WEB_DIR, DATA_DIR } from './paths.mjs';
@@ -1304,6 +1304,32 @@ if (req.method === 'GET' && resource === 'stream') {
       } catch (err) {
         return json(res, 500, { error: `复制失败: ${err.message}` });
       }
+    }
+    /* worktree 生命周期：列出任务下由 sbridge 创建的 worktree（状态、改动、领先提交） */
+    if (req.method === 'GET' && sub === 'worktrees') {
+      const task = db.tasks.find((t) => t.id === id);
+      if (!task) return json(res, 404, { error: '任务不存在' });
+      const seen = new Set();
+      const worktrees = [];
+      for (const n of task.nodes) {
+        const cwd = expandPath(n.cwd || '');
+        if (!cwd || seen.has(cwd) || !isSbridgeWorktree(cwd)) continue;
+        seen.add(cwd);
+        const info = worktreeInfo(cwd);
+        if (info) worktrees.push({ nodeId: n.id, title: n.title, tool: n.tool, ...info });
+      }
+      return json(res, 200, { worktrees });
+    }
+
+    /* 把某个会话的 worktree 分支合并回主仓库当前分支 */
+    if (req.method === 'POST' && sub === 'worktrees' && subId === 'merge') {
+      const body = await readBody(req);
+      const task = db.tasks.find((t) => t.id === id);
+      const node = task?.nodes.find((n) => n.id === body.nodeId);
+      if (!node) return json(res, 404, { error: '会话不存在' });
+      const result = mergeWorktree(expandPath(node.cwd || ''));
+      if (!result.ok) return json(res, 400, { error: result.error });
+      return json(res, 200, result);
     }
   }
 

@@ -96,13 +96,30 @@ function stripEmbeddedToolTrail(text) {
   return t;
 }
 
-function renderMessageHtml(text, max) {
+const mdTableCells = (line) => line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
+const mdIsTableSep = (line) => /\|/.test(line) && mdTableCells(line).every((c) => /^:?-{2,}:?$/.test(c));
+const unescapeHtmlEntities = (s) => String(s)
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+function mdTableHtml(header, rows) {
+  const head = header.map((c) => `<th>${inlineMessageHtml(c)}</th>`).join('');
+  const body = rows.map((r) => `<tr>${header.map((_, k) => `<td>${inlineMessageHtml(r[k] || '')}</td>`).join('')}</tr>`).join('');
+  return `<div class="md-table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+/* 图表块：把已转义的源码还原后交给 mermaid；data-src 留一份，主题切换时重渲染 */
+function mdMermaidHtml(escapedSrc) {
+  const src = unescapeHtmlEntities(escapedSrc);
+  return `<pre class="mermaid" data-src="${escapeHtml(src)}">${escapeHtml(src)}</pre>`;
+}
+
+function renderMessageHtml(text, max, opts = {}) {
+  const allowMermaid = opts.allowMermaid !== false;
   const lines = escapeHtml(clipText(stripEmbeddedToolTrail(text), max)).replace(/\r\n?/g, '\n').split('\n');
   const out = [];
   let paragraph = [];
   let listTag = '';
   let inCode = false;
   let codeLines = [];
+  let mermaidLines = null;
   const flushParagraph = () => {
     if (!paragraph.length) return;
     out.push(`<p>${inlineMessageHtml(paragraph.join('<br>'))}</p>`);
@@ -121,13 +138,19 @@ function renderMessageHtml(text, max) {
     listTag = tag;
   };
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const trimmed = line.trim();
-    if (/^```/.test(trimmed)) {
+    if (/^```/.test(trimmed) && !mermaidLines) {
+      const lang = trimmed.slice(3).trim().toLowerCase();
       if (inCode) {
         out.push(`<pre><code>${codeLines.join('\n')}</code></pre>`);
         codeLines = [];
         inCode = false;
+      } else if (allowMermaid && lang === 'mermaid') {
+        flushParagraph();
+        closeList();
+        mermaidLines = [];
       } else {
         flushParagraph();
         closeList();
@@ -135,8 +158,29 @@ function renderMessageHtml(text, max) {
       }
       continue;
     }
+    if (mermaidLines) {
+      if (/^```/.test(trimmed)) {
+        out.push(mdMermaidHtml(mermaidLines.join('\n')));
+        mermaidLines = null;
+      } else {
+        mermaidLines.push(line);
+      }
+      continue;
+    }
     if (inCode) { codeLines.push(line); continue; }
     if (!trimmed) { flushParagraph(); closeList(); continue; }
+    // Markdown 表格：表头 + 分隔行 + 若干行；单元格内容仍走保守的行内格式化
+    if (trimmed.startsWith('|') && mdIsTableSep((lines[i + 1] || '').trim())) {
+      const header = mdTableCells(trimmed);
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].trim().startsWith('|')) { rows.push(mdTableCells(lines[j].trim())); j += 1; }
+      flushParagraph();
+      closeList();
+      out.push(mdTableHtml(header, rows));
+      i = j - 1;
+      continue;
+    }
     if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
       flushParagraph(); closeList(); out.push('<hr>'); continue;
     }
@@ -168,11 +212,86 @@ function renderMessageHtml(text, max) {
     closeList();
     paragraph.push(trimmed);
   }
+  if (mermaidLines) out.push(`<pre><code>${mermaidLines.join('\n')}</code></pre>`); // 未闭合：退回代码块
   if (inCode && codeLines.length) out.push(`<pre><code>${codeLines.join('\n')}</code></pre>`);
   flushParagraph();
   closeList();
   return out.join('');
 }
+
+/* ---------- mermaid 图表：按需加载，主题切换时按原始源码重渲染 ---------- */
+let mermaidLoading = null;
+function mermaidConfig() {
+  const css = (name, fb) => getComputedStyle(document.body).getPropertyValue(name).trim() || fb;
+  const dark = document.body.classList.contains('theme-dark');
+  return {
+    startOnLoad: false,
+    securityLevel: 'strict',
+    theme: 'base',
+    fontFamily: getComputedStyle(document.body).fontFamily || 'sans-serif',
+    themeVariables: {
+      background: css('--panel', dark ? '#191a1d' : '#ffffff'),
+      primaryColor: css('--accent-soft', dark ? '#26263a' : '#efedfb'),
+      primaryTextColor: css('--text', dark ? '#e8e6e1' : '#1c1b19'),
+      primaryBorderColor: css('--line-strong', dark ? '#3a3b40' : '#dcd8cf'),
+      lineColor: css('--muted', dark ? '#9a978f' : '#74726b'),
+      textColor: css('--text', dark ? '#e8e6e1' : '#1c1b19'),
+      secondaryColor: css('--card', dark ? '#1e1f23' : '#ffffff'),
+      tertiaryColor: css('--bg', dark ? '#111214' : '#f7f5f1'),
+      mainBkg: css('--card', dark ? '#1e1f23' : '#ffffff'),
+      nodeBorder: css('--line-strong', dark ? '#3a3b40' : '#dcd8cf'),
+      clusterBkg: css('--panel', dark ? '#191a1d' : '#fffefb'),
+      clusterBorder: css('--line', dark ? '#2a2b2f' : '#e9e6df'),
+      edgeLabelBackground: css('--panel', dark ? '#191a1d' : '#fffefb'),
+      // 饼图/图例：用项目已有的语义色，浅深主题都能分得开
+      pie1: css('--accent', dark ? '#8b87f0' : '#5b5bd6'),
+      pie2: css('--codex', dark ? '#3fb695' : '#0e7a63'),
+      pie3: css('--claude', dark ? '#e09a4a' : '#b45309'),
+      pie4: css('--pi', dark ? '#a678f2' : '#7c4ddc'),
+      pie5: '#2f9e8f',
+      pie6: '#d97757',
+      pieTitleTextColor: css('--text', dark ? '#e8e6e1' : '#1c1b19'),
+      pieSectionTextColor: dark ? '#f5f4f0' : '#ffffff',
+      pieLegendTextColor: css('--text', dark ? '#e8e6e1' : '#1c1b19'),
+      pieStrokeColor: css('--panel', dark ? '#191a1d' : '#fffefb'),
+      pieStrokeWidth: '2px',
+      pieOpacity: '0.92',
+    },
+  };
+}
+function ensureMermaid() {
+  if (window.mermaid) return Promise.resolve(window.mermaid);
+  if (mermaidLoading) return mermaidLoading;
+  mermaidLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = '/vendor/mermaid.min.js';
+    script.async = true;
+    script.onload = () => {
+      try { window.mermaid.initialize(mermaidConfig()); } catch { /* ignore */ }
+      resolve(window.mermaid);
+    };
+    script.onerror = () => { mermaidLoading = null; reject(new Error('mermaid 加载失败')); };
+    document.head.appendChild(script);
+  });
+  return mermaidLoading;
+}
+function renderMermaidIn(root) {
+  const nodes = [...root.querySelectorAll('pre.mermaid:not([data-processed])')];
+  if (!nodes.length) return;
+  ensureMermaid().then((mermaid) => {
+    const live = nodes.filter((n) => n.isConnected);
+    if (live.length) mermaid.run({ nodes: live }).catch(() => { /* 语法错误不打断会话 */ });
+  }).catch(() => { /* 加载失败保留原文 */ });
+}
+document.addEventListener('sbridge:theme', () => {
+  document.querySelectorAll('pre.mermaid[data-processed]').forEach((n) => {
+    if (n.dataset.src == null) return;
+    n.removeAttribute('data-processed');
+    n.textContent = n.dataset.src;
+  });
+  if (window.mermaid) { try { window.mermaid.initialize(mermaidConfig()); } catch { /* ignore */ } }
+  renderMermaidIn(document.body);
+});
 
 function renderEvtHtml(evt) {
   if (evt.kind === 'user') {
@@ -538,7 +657,7 @@ function createCotTimeline(listEl, options) {
         // 靠左右对齐区分说话人，不需要头像图标；整段回答的末尾才放复制/分支组件
         return `<div class="chat-msg ${isUser ? 'is-user' : 'is-assistant'}">
           <div class="chat-msg-body">
-            <div class="chat-bubble">${step.bodyHtml || `<div class="sev-text">${renderMessageHtml(step.text || '', isUser ? 3000 : 6000)}</div>`}</div>
+            <div class="chat-bubble">${step.bodyHtml || `<div class="sev-text">${renderMessageHtml(step.text || '', isUser ? 3000 : 6000, { allowMermaid: !isUser })}</div>`}</div>
             ${canCopy ? `<div class="chat-actions">
               <button type="button" class="chat-copy" data-copy="${idx}" title="复制整段内容">${icon('copy', 12)}</button>
               ${canBranch ? `<button type="button" class="chat-copy chat-branch" data-branch="${idx}" title="创建分支：复制当前会话（保留完整历史），原会话不变">${icon('git', 12)}</button>` : ''}
@@ -567,6 +686,8 @@ function createCotTimeline(listEl, options) {
         <span class="chat-working-time" aria-hidden="true">${escapeHtml(work.time)}</span>
       </div>
     </div>`;
+
+    renderMermaidIn(listEl);
 
     // 工具行需要按顺序插在消息之间：上面 bodyHtml 已含工具行，隐藏冗余容器
     titleEl = listEl.querySelector('.chat-working-label');
@@ -627,7 +748,7 @@ function createCotTimeline(listEl, options) {
       endTs: cotNormalizeTs(evt.ts),
       text,
       sourceDetail: isUser ? '用户输入' : '助手回复',
-      bodyHtml: `<div class="sev-text">${renderMessageHtml(text, isUser ? 3000 : 6000)}</div>`,
+      bodyHtml: `<div class="sev-text">${renderMessageHtml(text, isUser ? 3000 : 6000, { allowMermaid: !isUser })}</div>`,
     };
   };
 

@@ -1544,3 +1544,51 @@ svg.ico { flex: none; vertical-align: -2px; }
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); background-clip: content-box; }
 
+
+/* Markdown 表格与 mermaid 图表（消息内富渲染） */
+.md-table-wrap {
+  margin: 10px 0; border: 1px solid var(--line); border-radius: 10px;
+  overflow: auto; background: var(--panel);
+}
+.md-table-wrap table { width: 100%; border-collapse: collapse; font-size: 12.8px; }
+.md-table-wrap th, .md-table-wrap td {
+  padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap;
+}
+.md-table-wrap th { background: var(--pill-soft); font-weight: 600; color: var(--text); }
+.md-table-wrap tr:last-child td { border-bottom: 0; }
+.chat-bubble pre.mermaid, .sev-text pre.mermaid {
+  margin: 10px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); overflow: auto; text-align: center;
+}
+.chat-bubble pre.mermaid svg, .sev-text pre.mermaid svg { max-width: 100%; height: auto; }
+pre.mermaid:not([data-processed]) {
+  font-size: 12px; color: var(--muted); text-align: left; white-space: pre;
+}
+
+/* Worktree 标记与合并弹窗 */
+.chip.wt { color: var(--accent); background: var(--accent-soft); }
+.wt-grid {
+  display: grid; gap: 8px 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  margin-bottom: 10px;
+}
+.wt-grid > div { display: flex; gap: 8px; align-items: baseline; font-size: 12.8px; min-width: 0; }
+.wt-grid span { color: var(--muted); flex: none; }
+.wt-grid code {
+  font-size: 12px; color: var(--text); background: var(--pill-soft);
+  padding: 2px 6px; border-radius: 6px; overflow: hidden; text-overflow: ellipsis;
+}
+.wt-files {
+  margin: 0 0 10px; padding: 8px 10px; max-height: 180px; overflow: auto;
+  font-size: 12px; line-height: 1.6; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  white-space: pre-wrap;
+}
+.wt-warn { color: var(--danger); }
+
+/* 覆盖代码块的黑底：mermaid 图表跟随面板底色（含助手气泡里的强选择器） */
+.sev-text pre.mermaid,
+.chat-bubble pre.mermaid,
+.chat-msg.is-assistant .sev-text pre.mermaid,
+.chat-msg.is-user .sev-text pre.mermaid {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text);
+}

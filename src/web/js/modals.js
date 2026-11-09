@@ -539,3 +539,55 @@ function openTermCloseModal() {
   return close;
 }
 
+
+/** Worktree：查看这个会话的独立工作区，并把分支合并回主仓库当前分支 */
+async function openWorktreeModal(node) {
+  const taskId = currentTask?.id;
+  if (!taskId) return null;
+  let info = null;
+  const close = openModal({
+    title: 'Worktree 分支',
+    bodyHtml: '<div class="hint">读取 worktree 状态…</div>',
+    submitLabel: '合并到主分支',
+    onSubmit: async () => {
+      if (!info) throw new Error('这个会话没有可合并的 worktree');
+      if (info.merged) throw new Error('这个分支已经合并过了');
+      if (info.dirtyCount) throw new Error(`worktree 还有 ${info.dirtyCount} 个未提交改动；先让 agent 提交或手动 commit`);
+      if (!info.ahead) throw new Error('没有需要合并的新提交');
+      const r = await api(`/api/tasks/${taskId}/worktrees/merge`, { method: 'POST', body: { nodeId: node.id } });
+      toast(r.already ? `分支已在 ${r.info?.base || info.base} 里` : `已合并 ${r.info?.branch || info.branch} → ${r.info?.base || info.base}`);
+      if (typeof renderBoard === 'function') renderBoard();
+    },
+  });
+  try {
+    const data = await api(`/api/tasks/${taskId}/worktrees`);
+    info = (data.worktrees || []).find((w) => w.nodeId === node.id) || null;
+    const body = $('modal-body');
+    if (!body) return close;
+    if (!info) {
+      body.innerHTML = '<p class="hint">这个会话没有独立的 sbridge worktree（非 git 仓库，或创建会话时主工作区不干净）。</p>';
+      const submit = $('modal-submit');
+      if (submit) submit.disabled = true;
+      return close;
+    }
+    body.innerHTML = `
+      <div class="wt-grid">
+        <div><span>工作区</span><code>${escapeHtml(info.path)}</code></div>
+        <div><span>分支</span><code>${escapeHtml(info.branch)}</code></div>
+        <div><span>合并到</span><code>${escapeHtml(info.base || '?')}</code></div>
+        <div><span>提交</span>领先 ${info.ahead} · 落后 ${info.behind}</div>
+        <div><span>状态</span>${info.merged ? '已合并' : info.dirtyCount ? `<span class="wt-warn">${info.dirtyCount} 个未提交改动</span>` : '工作区干净'}</div>
+      </div>
+      ${info.files?.length ? `<pre class="wt-files">${escapeHtml(info.files.join('\n'))}</pre>` : ''}
+      <p class="hint">${info.merged ? '这个分支已在主分支里，无需再合并。' : info.dirtyCount ? 'worktree 里还有没提交的改动，直接合并会漏掉它们；先提交再回来。' : info.ahead ? '合并会用 --no-ff 生成一个合并提交；主仓库有未提交改动时会拒绝。' : '分支没有领先主分支的提交。'}</p>`;
+    const submit = $('modal-submit');
+    if (submit) {
+      submit.disabled = info.merged || info.dirtyCount > 0 || !info.ahead;
+      if (submit.disabled) submit.title = info.merged ? '已合并' : info.dirtyCount ? '请先提交改动' : '没有新提交';
+    }
+  } catch (err) {
+    const body = $('modal-body');
+    if (body) body.innerHTML = `<p class="hint">${escapeHtml(err.message)}</p>`;
+  }
+  return close;
+}

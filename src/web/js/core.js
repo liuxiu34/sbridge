@@ -117,6 +117,8 @@ const theme = {
     for (const t of this.liveTerms) {
       try { t.options.theme = this.xtermTheme(); } catch { /* ignore */ }
     }
+    // 图表（mermaid）颜色是渲染时烘进去的，切主题后需要重画
+    document.dispatchEvent(new CustomEvent('sbridge:theme', { detail: this.current }));
   },
   toggle() {
     this.current = this.current === 'dark' ? 'light' : 'dark';

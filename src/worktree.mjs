@@ -42,3 +42,83 @@ export function maybeCreateWorktree(cwd, label) {
     return { cwd, created: false, reason: `创建 worktree 失败：${err.message}` };
   }
 }
+
+/* ---------- worktree 生命周期：查看状态 + 合并回主分支 ---------- */
+
+const WT_MARK = /[\\/]\.sbridge-worktrees[\\/]/i;
+
+function gitRun(args, cwd) {
+  try {
+    const out = execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true, out: String(out || '').trim() };
+  } catch (err) {
+    return { ok: false, out: String(`${err.stdout || ''}${err.stderr || ''}`).trim() || String(err.message || '') };
+  }
+}
+
+const git = (args, cwd) => {
+  const r = gitRun(args, cwd);
+  if (!r.ok) throw new Error(r.out);
+  return r.out;
+};
+
+/** 是否是 sbridge 自建的 worktree（只认 .sbridge-worktrees 下的目录，不碰用户自己的 worktree） */
+export function isSbridgeWorktree(cwd) {
+  return WT_MARK.test(String(cwd || ''));
+}
+
+/** 读取 worktree 与主仓库的状态：分支、领先/落后提交数、未提交改动、是否已合并 */
+export function worktreeInfo(cwd) {
+  if (!cwd || !fs.existsSync(cwd)) return null;
+  let top = '';
+  try { top = git(['rev-parse', '--show-toplevel'], cwd); } catch { return null; }
+  if (!top || !isSbridgeWorktree(top)) return null;
+  let branch = '';
+  try { branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], top); } catch { return null; }
+  let repo = '';
+  try {
+    const common = git(['rev-parse', '--git-common-dir'], top);
+    repo = path.dirname(path.resolve(top, common));
+  } catch { /* 老版本/异常时留空 */ }
+  let base = '';
+  try { base = repo ? git(['rev-parse', '--abbrev-ref', 'HEAD'], repo) : ''; } catch { /* ignore */ }
+  let statusLines = [];
+  try { statusLines = git(['status', '--porcelain'], top).split('\n').filter(Boolean); } catch { /* ignore */ }
+  let ahead = 0;
+  let behind = 0;
+  let merged = false;
+  if (repo && base && branch) {
+    const a = gitRun(['rev-list', '--count', `${base}..${branch}`], repo);
+    if (a.ok) ahead = Number(a.out) || 0;
+    const b = gitRun(['rev-list', '--count', `${branch}..${base}`], repo);
+    if (b.ok) behind = Number(b.out) || 0;
+    merged = gitRun(['merge-base', '--is-ancestor', branch, base], repo).ok;
+  }
+  return {
+    path: top, branch, repo, base, ahead, behind,
+    dirtyCount: statusLines.length,
+    files: statusLines.slice(0, 40),
+    merged,
+  };
+}
+
+/** 把 worktree 分支合并回主仓库当前分支；有未提交改动/冲突时拒绝并回滚 */
+export function mergeWorktree(cwd) {
+  const info = worktreeInfo(cwd);
+  if (!info) return { ok: false, error: '这个会话不在 sbridge 的独立 worktree 里' };
+  if (!info.repo || !info.base) return { ok: false, error: '找不到主仓库或目标分支' };
+  if (info.dirtyCount) {
+    return { ok: false, error: `worktree 还有 ${info.dirtyCount} 个未提交改动；先让 agent 提交或手动 commit 后再合并` };
+  }
+  if (info.merged) return { ok: true, already: true, info };
+  const repoStatus = gitRun(['status', '--porcelain'], info.repo);
+  if (repoStatus.ok && repoStatus.out) {
+    return { ok: false, error: `主仓库有未提交改动，先提交或清理后再合并到 ${info.base}` };
+  }
+  const r = gitRun(['merge', '--no-ff', '--no-edit', info.branch], info.repo);
+  if (!r.ok) {
+    gitRun(['merge', '--abort'], info.repo);
+    return { ok: false, error: r.out ? `合并失败（已回滚）：${r.out}` : '合并失败（已回滚）' };
+  }
+  return { ok: true, output: r.out, info: worktreeInfo(cwd) || info };
+}
