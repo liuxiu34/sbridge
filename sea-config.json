@@ -18,6 +18,7 @@
     "web/js/tasks.js": "src/web/js/tasks.js",
     "web/js/modals.js": "src/web/js/modals.js",
     "web/js/handoff.js": "src/web/js/handoff.js",
+    "web/js/sidepanel.js": "src/web/js/sidepanel.js",
     "web/js/actions.js": "src/web/js/actions.js",
     "web/diag.html": "src/web/diag.html",
     "web/vendor/xterm.js": "src/web/vendor/xterm.js",

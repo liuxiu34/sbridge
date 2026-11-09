@@ -614,8 +614,14 @@ function createCotTimeline(listEl, options) {
 
   const render = () => {
     const stick = nearBottom();
+    const paneEl = listEl.closest('.session-pane');
+    if (paneEl) paneEl.classList.toggle('is-empty', steps.length === 0);
     if (!steps.length) {
-      listEl.innerHTML = `<div class="cot-empty"><strong>还没有对话</strong>${escapeHtml(emptyMessage)}</div>`;
+      listEl.innerHTML = `<div class="cot-empty">
+        <div class="cot-empty-title">要一起做点什么？</div>
+        <div class="cot-empty-sub">描述任务，或输入 / 查看可用命令</div>
+        <div class="cot-empty-meta">当前工具：${escapeHtml(toolLabel(node.tool))}</div>
+      </div>`;
       titleEl = workingEl = workingLabelEl = workingTimeEl = null;
       scheduleStreamUi();
       return;

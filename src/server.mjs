@@ -19,6 +19,7 @@ import * as termmod from './term.mjs';
 import { renderTranscript } from './transcript.mjs';
 import { ensureSubagentProtocols } from './subagent-protocol.mjs';
 import { maybeCreateWorktree, isSbridgeWorktree, worktreeInfo, mergeWorktree } from './worktree.mjs';
+import { inspectChanges, listDir, readFilePreview } from './git-inspect.mjs';
 import { scanProjectState, scanProjectTruth, renderProjectTruth } from './project-scan.mjs';
 import { expandPath, samePath, truncate, estimateTokens } from './util.mjs';
 import { IS_SEA, ROOT, WEB_DIR, DATA_DIR } from './paths.mjs';
@@ -1257,6 +1258,35 @@ if (req.method === 'GET' && resource === 'stream') {
         'cache-control': 'no-cache',
       });
       return res.end(renderSessionMarkdown(node, evts));
+    }
+
+    /* 右侧面板：改动（git status / 单文件 diff），只读 */
+    if (req.method === 'GET' && sub === 'nodes' && subId && extra === 'changes') {
+      const node = db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      const cwd = expandPath(node.cwd || '');
+      if (!cwd || !fs.existsSync(cwd)) return json(res, 400, { error: '会话工作目录不存在' });
+      try {
+        const data = inspectChanges(cwd, url.searchParams.get('path') || '');
+        return json(res, 200, { cwd, ...data });
+      } catch (err) {
+        return json(res, 400, { error: err.message });
+      }
+    }
+
+    /* 右侧面板：文件树 / 文本预览，只读且限制在会话工作目录内 */
+    if (req.method === 'GET' && sub === 'nodes' && subId && extra === 'files') {
+      const node = db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      const cwd = expandPath(node.cwd || '');
+      if (!cwd || !fs.existsSync(cwd)) return json(res, 400, { error: '会话工作目录不存在' });
+      const rel = url.searchParams.get('path') || '';
+      try {
+        if (url.searchParams.get('read') === '1') return json(res, 200, { cwd, ...readFilePreview(cwd, rel) });
+        return json(res, 200, { cwd, ...listDir(cwd, rel) });
+      } catch (err) {
+        return json(res, 400, { error: err.message });
+      }
     }
 
     if (req.method === 'GET' && sub === 'nodes' && subId) {

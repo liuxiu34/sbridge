@@ -75,9 +75,16 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       </div>
       <div class="sev-scroll" data-role="streamscroll" hidden><div class="sev-list" data-role="list"></div></div>
       <button type="button" class="stream-bottom" data-role="streambottom" title="滚到最新工作轨迹" hidden>${icon('down')} 回到最新</button>
-      <div class="sess-input">
-        <textarea rows="1" placeholder="输入发给 ${toolLabel(node.tool)}…（Enter 发送，Shift+Enter 换行）"></textarea>
-        <button class="btn-primary">发送</button>
+      <div class="sess-input" data-role="composer">
+        <div class="composer">
+          <textarea rows="1" data-role="input" placeholder="问点什么，或直接描述任务…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <div class="composer-bar">
+            <span class="composer-note" data-role="checkout"></span>
+            <span class="composer-grow"></span>
+            <span class="composer-tool"><span class="chip ${node.tool}">${toolLabel(node.tool)}</span></span>
+            <button type="button" class="btn-send" data-role="send" title="发送（Enter）">${icon('arrowUp', 15)}</button>
+          </div>
+        </div>
       </div>
     </div>`;
 
@@ -92,6 +99,13 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   const termHistoryBtn = host.querySelector('[data-role="termhistory"]');
   const streamBottomBtn = host.querySelector('[data-role="streambottom"]');
   const cancelHeadlessBtn = host.querySelector('[data-pact="cancelheadless"]');
+  // 输入卡片底部：当前分支 · 目录尾名（对应 T3 的 Current checkout 行）
+  const checkoutEl = host.querySelector('[data-role="checkout"]');
+  if (checkoutEl) {
+    const dirName = String(node.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '';
+    const branch = currentTask?.project?.branch || '';
+    checkoutEl.textContent = [branch, dirName].filter(Boolean).join(' · ');
+  }
   // 进度分叉提示，两个按钮时机不同：
   //   跳转到最新会话 = 仅链内有更新的后代时出现（同链新会话取代了本会话）
   //   合并全部进度并继续 = 只要本会话不是全任务最新就出现（它没掌握全部最新进度，跨链动态也算）
@@ -453,8 +467,8 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
 
   // 输入
   if (active) {
-    const ta = host.querySelector('textarea');
-    const btn = host.querySelector('.sess-input button');
+    const ta = host.querySelector('[data-role="input"]');
+    const btn = host.querySelector('[data-role="send"]');
     /* 斜杠命令菜单 + 历史命令（PgUp/PgDn）：让工作轨迹输入框的手感对齐终端。
        命令表是静态精选（CLI 的完整清单未暴露 API；菜单只做辅助，手输任意命令照常发送）。 */
     const SLASH_COMMANDS = {
@@ -503,7 +517,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     const menu = document.createElement('div');
     menu.className = 'slash-menu';
     menu.hidden = true;
-    sessInput.insertBefore(menu, ta);
+    sessInput.appendChild(menu);
     let menuItems = [];
     let menuIdx = 0;
     let historyIdx = -1;

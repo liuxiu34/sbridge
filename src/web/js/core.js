@@ -197,6 +197,10 @@ const ICONS = {
   more: '<circle cx="12" cy="5.4" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="18.6" r="1.2" fill="currentColor" stroke="none"/>', // 更多
   download: '<path d="M12 3v12"/><path d="M7 10.5 12 15.5l5-5"/><path d="M4 20h16"/>', // 导出
   refresh: '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/>',              // 刷新/重新检查
+  panel: '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M14.6 4.5v15" opacity=".55"/><path d="M17.4 8.6h1.6M17.4 11.4h1.6" opacity=".8"/>', // 右侧面板
+  diff: '<path d="M8 4v12"/><circle cx="8" cy="18.5" r="2"/><circle cx="16" cy="5.5" r="2"/><path d="M16 7.5v6a4 4 0 0 1-4 4h-2"/>', // 改动对比
+  arrowUp: '<path d="M12 19V5"/><path d="M6 11l6-6 6 6"/>',                          // 发送
+  file: '<path d="M6 3.5h7l5 5v12a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 5 20.5V5A1.5 1.5 0 0 1 6.5 3.5z"/><path d="M13 3.5V9h5" opacity=".6"/>', // 文件
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
 };
 /** 生成内联 SVG 图标（currentColor 随按钮着色） */
