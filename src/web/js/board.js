@@ -131,12 +131,15 @@ function renderBoard() {
       : edgeKind === 'branch'
         ? '<span class="chip branch" title="分支：原生 fork 复制当前会话（原会话不变）">分支</span>'
         : '';
+    const wtChip = /[\\/]\.sbridge-worktrees[\\/]/i.test(String(n.cwd || ''))
+      ? '<span class="chip wt" title="独立 worktree 工作区">WT</span>' : '';
     const running = nodeTermFor(n) ? '<span class="run-dot" title="终端运行中"></span>' : '';
     return `<div class="card ${visible.includes(n.id) && !boardMode ? 'selected' : ''} ${n.id === activeTabId && !boardMode ? 'focused' : ''} ${boardMode && boardSel.has(n.id) ? 'sel' : ''}" data-node="${n.id}"
       style="left:${pos.x}px;top:${pos.y}px">
       <div class="card-head">
         <span class="chip ${n.tool}">${toolLabel(n.tool)}</span>
         ${edgeChip}
+        ${wtChip}
         ${running}
         <span class="time">${fmtTime(n.createdAt)}</span>
       </div>
@@ -252,6 +255,8 @@ function openBoardMenu(nodeId, x, y) {
     { icon: 'split', label: '分屏打开', run: () => openInOtherSlot(node.id) },
     { icon: 'context', label: '会话上下文', run: () => openCtxModal(node) },
     { icon: 'download', label: '导出 Markdown（只读）', run: () => exportNodeMarkdown(node) },
+    /[\\/]\.sbridge-worktrees[\\/]/i.test(String(node.cwd || ''))
+      ? { icon: 'git', label: '查看 / 合并 Worktree 分支…', run: () => openWorktreeModal(node) } : null,
     running ? { icon: 'stop', label: '停止终端', danger: true, run: () => stopNodeTerm(node) } : null,
     { icon: 'trash', label: `从任务移除${boardSel.size > 1 ? `选中的 ${boardSel.size} 个会话` : '会话'}（不删本地文件）`, danger: true, run: () => removeTaskNodes([...boardSel]) },
     opened ? { icon: 'x', label: '关闭标签', run: () => closeTab(node.id) } : null,
