@@ -5,6 +5,7 @@
   "type": "module",
   "description": "会话接力工作台：在 Codex / Pi / Claude Code 之间搬运本地会话",
   "license": "Apache-2.0",
+  "homepage": "https://github.com/liuxiu34/sbridge",
   "scripts": {
     "app": "node src/server.mjs",
     "electron": "electron src/electron-main.cjs",
@@ -28,7 +29,10 @@
     "ws": "^8.22.1"
   },
   "productName": "sbridge",
-  "author": "lixiu",
+  "author": {
+    "name": "liuxiu34",
+    "email": "113959952+liuxiu34@users.noreply.github.com"
+  },
   "main": "src/electron-main.cjs",
   "build": {
     "appId": "com.lixiu.sbridge",
@@ -50,9 +54,12 @@
         "to": "sbridge",
         "filter": [
           "sbridge.exe",
-          "sbridge",
-          "node_modules/**"
+          "sbridge"
         ]
+      },
+      {
+        "from": "dist/node_modules",
+        "to": "sbridge/node_modules"
       }
     ],
     "win": {
