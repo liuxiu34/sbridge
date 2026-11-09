@@ -211,7 +211,8 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       // 链内：只看「本会话的后代」（接力链上有继承关系的新会话才谈得上「跳过去」）
       const children = new Map();
       for (const n of nodes) {
-        if (n.parentNodeId && n.id !== node.id) {
+        // 侧边对话是并行的独立会话：不算接力链后代，否则会误报「本会话未掌握最新进度」
+        if (n.parentNodeId && n.id !== node.id && n.edgeKind !== 'side') {
           if (!children.has(n.parentNodeId)) children.set(n.parentNodeId, []);
           children.get(n.parentNodeId).push(n);
         }

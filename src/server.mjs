@@ -1244,6 +1244,58 @@ if (req.method === 'GET' && resource === 'stream') {
       }
     }
 
+    /* 侧边对话：拿当前会话最近的上下文，生成一个独立会话（新文件，不改动原会话），
+       供右侧面板并行对话；之后面板用 send-headless 继续。 */
+    if (req.method === 'POST' && sub === 'nodes' && subId && extra === 'side-chat') {
+      const task = db.tasks.find((t) => t.id === id);
+      const node = task?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      const to = TOOLS[node.tool];
+      if (!to) return json(res, 400, { error: '未知工具' });
+      const cwd = expandPath(node.cwd || '');
+      if (!cwd || !fs.existsSync(cwd)) return json(res, 400, { error: `工作目录不存在: ${cwd}` });
+      const digest = buildSideDigest(node);
+      const seedTokens = estimateTokens(digest.text);
+      const ack = `已接收主会话上下文摘录（约 ${seedTokens} tokens）。这是一条独立的侧边对话，不会改动主会话。`;
+      let result;
+      try {
+        const modelOpt = node.model && node.modelProvider
+          ? { provider: node.modelProvider, modelId: node.model } : undefined;
+        result = to.write({
+          sourceTool: 'sbridge', id: 'side', cwd,
+          messages: [
+            { role: 'user', text: digest.text, ts: new Date().toISOString(), tools: [] },
+            { role: 'assistant', text: ack, ts: new Date().toISOString(), tools: [] },
+          ],
+        }, { cwd, model: modelOpt });
+      } catch (err) {
+        return json(res, 500, { error: `创建侧边会话失败: ${err.message}` });
+      }
+      // 生成会话文件是本地写盘，很快；写回前重载，避免覆盖用户并发改动
+      const freshDb = store.load();
+      const sideNode = store.addNode(freshDb, id, {
+        tool: node.tool,
+        sessionId: result.id,
+        file: result.file,
+        cwd,
+        title: `侧边对话 · ${truncate(node.title || '(会话)', 40)}`,
+        createdAt: new Date().toISOString(),
+        summary: {
+          messageCount: 2, turnCount: 1, tokens: seedTokens,
+          firstUser: truncate(digest.text, 300), lastAssistant: ack, files: [],
+        },
+        parentNodeId: node.id,
+        edgeKind: 'side',
+        sideOf: node.id,
+        model: node.model || null,
+        modelProvider: node.modelProvider || null,
+        modelSeen: node.model || null,
+        resumeCommand: result.resumeCommand,
+        registration: result.registration || null,
+      });
+      return json(res, 200, { ok: true, node: sideNode, seedTokens, seedChars: digest.messageChars });
+    }
+
     /* 上下文用量（单节点，轻量）：读工具自己的用量记录 + 该节点终端里的状态栏 */
     if (req.method === 'GET' && sub === 'nodes' && subId && extra === 'usage') {
       const node = db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
@@ -1500,9 +1552,60 @@ function writeCheckpointSession(to, ctxTaskId, rendered, targetCwd, version, { l
   return { sessionId: result.id, file: result.file, resumeCommand: result.resumeCommand, registration: result.registration || null, launched, termId, ack };
 }
 
+/** 侧边对话的种子文本：从当前会话文件尾部提取最近对话（不调用 LLM，秒级返回）。
+ *  只取 user/assistant 正文与工具名，按字数预算从新往旧回填，避免把大工具输出搬进去。 */
+function buildSideDigest(node, maxChars = 14000) {
+  const chunks = [];
+  const parser = PARSERS[node.tool];
+  const file = node.file && !String(node.file).startsWith('sqlite:') ? node.file : '';
+  if (file && parser) {
+    try {
+      const st = fs.statSync(file);
+      const len = Math.min(st.size, 512 * 1024);
+      const buf = Buffer.alloc(len);
+      const fd = fs.openSync(file, 'r');
+      try { fs.readSync(fd, buf, 0, len, Math.max(0, st.size - len)); } finally { fs.closeSync(fd); }
+      let text = buf.toString('utf8');
+      if (st.size > len) text = text.slice(text.indexOf('\n') + 1); // 丢掉被截断的首行
+      const evts = [];
+      for (const line of text.split('\n')) {
+        const t = line.trim();
+        if (!t) continue;
+        try { parser(JSON.parse(t), evts); } catch { /* 半行/坏行跳过 */ }
+      }
+      const recent = evts.filter((e) => e.kind === 'user' || e.kind === 'assistant' || e.kind === 'tool_call').slice(-40);
+      let used = 0;
+      for (let i = recent.length - 1; i >= 0; i--) {
+        const e = recent[i];
+        const body = e.kind === 'tool_call'
+          ? `（调用工具：${e.toolName || 'tool'}）`
+          : `[${e.kind === 'user' ? '用户' : 'AI'}] ${truncate(String(e.text || ''), 1600)}`;
+        if (!body.trim()) continue;
+        if (used + body.length > maxChars) break;
+        used += body.length + 1;
+        chunks.unshift(body);
+      }
+    } catch { /* 读不到就只带标题与目录 */ }
+  }
+  const head = [
+    '【侧边对话】',
+    '你现在在一个「侧边对话」里：和主会话并行、互不影响。下面是主会话最近的对话摘录，用来帮你理解任务背景。',
+    '摘录可能不完整；需要精确代码或细节时，请重新读取相关文件，不要假设摘录之外的内容。',
+    '',
+    `主会话：${truncate(node.title || '(无标题)', 80)}`,
+    `工具：${TOOL_LABELS[node.tool] || node.tool}`,
+    `目录：${node.cwd || '(未知)'}`,
+    '',
+    '--- 最近对话（从旧到新）---',
+  ];
+  if (!chunks.length) chunks.push('（这个会话还没有可提取的对话内容，请直接处理我接下来的问题。）');
+  chunks.push('--- 摘录结束 ---');
+  return { text: [...head, ...chunks].join('\n'), messageChars: chunks.join('\n').length };
+}
+
 /** board 任务的全部会话文件（去重），供增量捕获。
- *  接力生成的检查点会话（node.checkpointVersion 存在）必须排除，
- *  否则检查点文本会被再次捕获为事件，造成认知重复累积。 */
+ *  接力生成的检查点会话（node.checkpointVersion 存在）与侧边对话的种子会话必须排除，
+ *  否则同一段上下文会被再次捕获为事件，造成认知重复累积。 */
 function boardSessions(db, boardTaskId) {
   const task = db.tasks.find((t) => t.id === boardTaskId);
   if (!task) return [];
@@ -1510,7 +1613,7 @@ function boardSessions(db, boardTaskId) {
   return task.nodes
     .filter((n) => {
       if (!n.file || seen.has(n.file)) return false;
-      if (n.checkpointVersion) return false;
+      if (n.checkpointVersion || n.edgeKind === 'side') return false;
       seen.add(n.file);
       return true;
     })
