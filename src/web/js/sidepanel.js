@@ -9,7 +9,7 @@ const SP_ITEMS = [
   { id: 'worktree', icon: 'git', label: 'Worktree', key: 'W', hint: '独立工作区的分支状态与合并' },
 ];
 
-const spState = { open: false, surface: null, dir: '', file: null };
+const spState = { open: false, surface: null, dir: '', file: null, wtFile: null };
 let spLastKey = '';
 
 /* 侧边对话运行时状态：独立会话 + 自己的 SSE 流，面板关闭/切换时回收 */
@@ -106,6 +106,7 @@ function openSidePanel(id) {
   spState.surface = id || null;
   spState.dir = '';
   spState.file = null;
+  spState.wtFile = null;
   spLastKey = '';
   toggleSidePanel(true);
   spRender();
@@ -115,6 +116,7 @@ function spBack() {
   spState.surface = null;
   spState.dir = '';
   spState.file = null;
+  spState.wtFile = null;
   spLastKey = '';
   spRender();
 }
@@ -379,17 +381,30 @@ function spMountSide(body, sideNode) {
   modelBtn?.addEventListener('click', (e) => { e.stopPropagation(); openModelPop(); });
   loadModel();
 
-  /* 引用本地文件：桌面版弹系统文件框拿真实路径，浏览器里上传到数据目录再给路径 */
-  attachBtn?.addEventListener('click', async () => {
-    if (attachBtn.disabled) return;
-    attachBtn.disabled = true;
-    try {
-      const paths = await pickLocalFiles();
-      if (paths.length) {
-        appendFileRefs(ta, paths);
-        toast(`已引用 ${paths.length} 个文件`);
-      }
-    } finally { attachBtn.disabled = false; }
+  /* 「＋」菜单：上传文件 / 当前工具支持的斜杠命令 */
+  attachBtn?.addEventListener('click', () => {
+    openPlusMenu({
+      anchor: attachBtn,
+      tool: sideNode.tool,
+      stacked: true,
+      onFiles: async () => {
+        if (attachBtn.disabled) return;
+        attachBtn.disabled = true;
+        try {
+          const paths = await pickLocalFiles();
+          if (paths.length) {
+            appendFileRefs(ta, paths);
+            toast(`已引用 ${paths.length} 个文件`);
+          }
+        } finally { attachBtn.disabled = false; }
+      },
+      onCommand: (cmd) => {
+        ta.value = `/${cmd} `;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.focus();
+        try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch { /* ignore */ }
+      },
+    });
   });
 
   const setBusy = (v) => {
@@ -580,6 +595,36 @@ async function spRenderWorktree(body, node) {
     body.innerHTML = `<div class="sp-empty">这个会话没有独立的 sbridge worktree<br /><span class="sp-dim">非 git 仓库，或创建会话时主工作区不干净</span></div>`;
     return;
   }
+  const base = `/api/tasks/${currentTask.id}/nodes/${node.id}/worktree-changes`;
+
+  // 单文件 diff：从这里能直接看 worktree 里改了什么（不只是状态数字）
+  if (spState.wtFile) {
+    const d = await api(`${base}?path=${encodeURIComponent(spState.wtFile)}`);
+    const lines = String(d.diff || '').split('\n').slice(0, 2000);
+    body.innerHTML = `
+      <div class="sp-file-head">
+        <button type="button" class="sp-link" data-wt-back>← worktree</button>
+        <span class="sp-file-name" title="${escapeHtml(d.file || '')}">${escapeHtml(d.file || '')}</span>
+      </div>
+      <div class="sp-meta">+${d.added || 0} / -${d.deleted || 0}${d.truncated ? ' · 已截断' : ''}</div>
+      <pre class="sp-diff">${lines.map((l) => {
+        const cls = l.startsWith('+++') || l.startsWith('---') ? 'diff-head'
+          : l.startsWith('+') ? 'diff-add'
+            : l.startsWith('-') ? 'diff-del'
+              : l.startsWith('@@') ? 'diff-hunk' : '';
+        return `<span class="dl-line ${cls}">${escapeHtml(l) || ' '}</span>`;
+      }).join('')}</pre>`;
+    body.querySelector('[data-wt-back]')?.addEventListener('click', () => {
+      spState.wtFile = null;
+      spLastKey = '';
+      spRender();
+    });
+    return;
+  }
+
+  let changes = null;
+  try { changes = await api(base); } catch { /* 读不到改动就只展示状态 */ }
+  const files = changes?.files || [];
   body.innerHTML = `
     <div class="sp-meta">
       <span class="sp-branch">${escapeHtml(info.branch)}</span>
@@ -591,7 +636,23 @@ async function spRenderWorktree(body, node) {
     <div class="sp-actions">
       <button type="button" class="btn-primary" data-sp-merge ${info.merged || info.dirtyCount || !info.ahead ? 'disabled' : ''}>合并到 ${escapeHtml(info.base || '主分支')}</button>
       <button type="button" class="btn-ghost" data-sp-open>打开完整弹窗</button>
-    </div>`;
+    </div>
+    <div class="sp-subtitle">worktree 里的改动${files.length ? ` · ${files.length}` : ''}</div>
+    ${files.length ? `<div class="sp-list">${files.map((f) => {
+      const kind = f.code === '??' ? 'N' : f.code.includes('D') ? 'D' : 'M';
+      return `
+      <button type="button" class="sp-file" data-wt-file="${escapeHtml(f.path)}" title="${escapeHtml(f.path)}">
+        <span class="sp-file-status s-${kind}">${escapeHtml(f.label)}</span>
+        <span class="sp-file-path">${escapeHtml(f.path)}</span>
+      </button>`;
+    }).join('')}</div>` : `<div class="sp-empty">${info.dirtyCount ? '改动列表读取失败，可打开完整弹窗查看' : '没有未提交改动'}</div>`}`;
+  body.querySelectorAll('[data-wt-file]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      spState.wtFile = btn.dataset.wtFile;
+      spLastKey = '';
+      spRender();
+    });
+  });
   body.querySelector('[data-sp-open]')?.addEventListener('click', () => openWorktreeModal(node));
   body.querySelector('[data-sp-merge]')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;

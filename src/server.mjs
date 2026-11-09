@@ -1505,6 +1505,21 @@ if (req.method === 'GET' && resource === 'stream') {
       if (!result.ok) return json(res, 400, { error: result.error });
       return json(res, 200, result);
     }
+
+    /* 这个会话的 worktree 里的具体改动（文件列表 / 单文件 diff），供右侧面板查看 */
+    if (req.method === 'GET' && sub === 'nodes' && subId && extra === 'worktree-changes') {
+      const node = db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '会话不存在' });
+      const cwd = expandPath(node.cwd || '');
+      if (!cwd || !isSbridgeWorktree(cwd)) return json(res, 404, { error: '这个会话没有独立的 sbridge worktree' });
+      const info = worktreeInfo(cwd);
+      if (!info) return json(res, 404, { error: 'worktree 已不存在或无法读取' });
+      try {
+        return json(res, 200, inspectChanges(info.path, url.searchParams.get('path') || ''));
+      } catch (err) {
+        return json(res, 400, { error: err.message });
+      }
+    }
   }
 
   return json(res, 404, { error: '未知接口' });

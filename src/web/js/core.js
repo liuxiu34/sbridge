@@ -231,6 +231,112 @@ function appendFileRefs(ta, paths) {
   try { const end = ta.value.length; ta.setSelectionRange(end, end); } catch { /* ignore */ }
 }
 
+/* ---------- 各 CLI 支持的斜杠命令（静态精选；CLI 没有暴露完整清单） ---------- */
+const TOOL_COMMANDS = {
+  claude: [
+    ['model', '<provider/model> — 选择模型'],
+    ['settings', '打开设置菜单'],
+    ['tree', '会话树导航（切换分支）'],
+    ['thinking', '<level> — 设置思考等级'],
+    ['scoped-models', '启用/禁用 Ctrl+P 模型轮换'],
+    ['compact', '压缩对话上下文'],
+    ['clear', '清空当前对话'],
+    ['resume', '恢复历史会话'],
+    ['review', '代码审查'],
+    ['init', '初始化项目 CLAUDE.md'],
+    ['agents', '管理子代理'],
+    ['mcp', '管理 MCP 服务器'],
+    ['permissions', '权限管理'],
+    ['memory', '编辑记忆文件'],
+    ['config', '打开配置'],
+    ['cost', '用量统计'],
+    ['doctor', '安装/环境诊断'],
+    ['status', '账号与版本状态'],
+    ['export', '导出当前对话'],
+    ['login', '登录账号'],
+    ['logout', '退出登录'],
+    ['help', '帮助'],
+  ],
+  pi: [
+    ['model', '选择/切换模型'],
+    ['help', '帮助'],
+    ['clear', '清屏'],
+    ['login', '登录/配置账号'],
+  ],
+  codex: [
+    ['model', '选择模型'],
+    ['approvals', '审批模式设置'],
+    ['init', '初始化项目 AGENTS.md'],
+    ['status', '状态'],
+    ['compact', '压缩对话上下文'],
+    ['review', '代码审查'],
+    ['diff', '查看改动'],
+  ],
+};
+const toolCommands = (tool) => TOOL_COMMANDS[tool] || [];
+
+/* ---------- 输入框「＋」菜单：上传文件 / 当前工具支持的斜杠命令 ---------- */
+function openPlusMenu({ anchor, tool, stacked = false, onFiles, onCommand }) {
+  if (!anchor) return;
+  const existing = document.querySelector('.attach-pop');
+  if (existing) existing.remove();
+  const host = anchor.closest('.composer, .sp-chat-compose') || anchor.parentElement;
+  if (!host) return;
+  const pop = document.createElement('div');
+  pop.className = `attach-pop${stacked ? ' is-stacked' : ''}`;
+  pop.innerHTML = `
+    <button type="button" class="attach-item" data-act="files"><span class="attach-icon">${icon('plus', 14)}</span><span class="grow">上传文件</span></button>
+    <button type="button" class="attach-item" data-act="cmd"><span class="attach-icon">${icon('terminal', 14)}</span><span class="grow">命令</span><span class="attach-arrow">›</span></button>
+    <div class="attach-sub" hidden></div>`;
+  host.appendChild(pop);
+  const sub = pop.querySelector('.attach-sub');
+  const cmdBtn = pop.querySelector('[data-act="cmd"]');
+  const close = () => {
+    pop.remove();
+    document.removeEventListener('click', outside, true);
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const outside = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); };
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  setTimeout(() => {
+    document.addEventListener('click', outside, true);
+    document.addEventListener('keydown', onKey, true);
+  }, 0);
+
+  const paintSub = () => {
+    const list = toolCommands(tool);
+    if (!list.length) {
+      sub.innerHTML = '<div class="attach-empty">这个工具没有已知的斜杠命令</div>';
+      return;
+    }
+    sub.innerHTML = list.map(([cmd, desc]) => `
+      <button type="button" class="slash-item" data-cmd="${escapeHtml(cmd)}">
+        <span class="slash-cmd">${escapeHtml(cmd)}</span><span class="slash-desc">${escapeHtml(desc)}</span>
+      </button>`).join('');
+    sub.querySelectorAll('[data-cmd]').forEach((b) => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const cmd = b.dataset.cmd;
+        close();
+        onCommand?.(cmd);
+      });
+    });
+  };
+
+  pop.querySelector('[data-act="files"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    close();
+    onFiles?.();
+  });
+  cmdBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!sub.hidden) { sub.hidden = true; cmdBtn.classList.remove('active'); return; }
+    if (!sub.childElementCount) paintSub();
+    sub.hidden = false;
+    cmdBtn.classList.add('active');
+  });
+}
+
 window.addEventListener('error', (e) => toast(`前端错误: ${e.message}`));
 window.addEventListener('unhandledrejection', (e) => toast(`前端错误: ${e.reason?.message || e.reason}`));
 
