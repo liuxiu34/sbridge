@@ -1990,3 +1990,11 @@ pre.mermaid:not([data-processed]) {
 }
 .sp-chat-attach:hover { background: var(--hover-soft); color: var(--text); }
 .sp-chat-attach:disabled { opacity: .45; cursor: default; }
+
+/* 模型切换挪到输入框一侧：弹层从输入框上方展开（和主对话一致） */
+.sp-chat-compose { position: relative; }
+.sp-chat-compose .sp-chat-model {
+  flex: none; max-width: 108px; height: 34px; padding: 0 8px;
+  border-radius: 9px; font-size: 11.5px;
+}
+.sp-chat-compose .sp-chat-model span { max-width: 82px; }

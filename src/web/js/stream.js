@@ -376,7 +376,7 @@ function cotSourceMeta(tool) {
 }
 
 function createCotTimeline(listEl, options) {
-  const { node, isFirstBatch, nearBottom, toBottom, scheduleStreamUi, isTerminalRunning, isHeadlessRunning, headlessElapsed, scrollEl } = options;
+  const { node, isFirstBatch, nearBottom, toBottom, scheduleStreamUi, isTerminalRunning, isHeadlessRunning, headlessElapsed, scrollEl, hideSeed, hideBranch } = options;
   const source = cotSourceMeta(node.tool);
   const uid = `cot-${Math.random().toString(36).slice(2, 9)}`;
   const steps = [];
@@ -672,7 +672,7 @@ function createCotTimeline(listEl, options) {
         const isUser = step.kind === 'user';
         const idx = steps.indexOf(step);
         const canCopy = copyTexts.has(idx);
-        const canBranch = canCopy && !isUser; // 只在一整段回答的末尾提供「创建分支」
+        const canBranch = canCopy && !isUser && !hideBranch; // 只在一整段回答的末尾提供「创建分支」
         // 靠左右对齐区分说话人，不需要头像图标；整段回答的末尾才放复制/分支组件
         return `<div class="chat-msg ${isUser ? 'is-user' : 'is-assistant'}">
           <div class="chat-msg-body">
@@ -863,6 +863,11 @@ function createCotTimeline(listEl, options) {
       if (!evt) return;
       if (evt.type === 'history-truncated') { setHistoryTruncated(evt); return; }
       if (evt.type === 'gone') { gone = true; connected = false; render(); return; }
+      // 侧边对话的上下文种子是隐式的：不占对话流（主对话打开这个会话时照常显示）
+      if (hideSeed && (evt.kind === 'user' || evt.kind === 'assistant')) {
+        const text = String(evt.text || '');
+        if (text.startsWith('【侧边对话】') || text.startsWith('已接收主会话上下文摘录')) return;
+      }
       // 乐观消息去重：SSE 收到同一句用户消息时，保留本地那条（避免出现两个一模一样的用户气泡）
       if (evt.kind === 'user' && localUserPending != null
         && String(evt.text ?? '').trim() === localUserPending) {
