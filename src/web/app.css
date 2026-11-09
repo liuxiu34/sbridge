@@ -2041,3 +2041,7 @@ pre.mermaid:not([data-processed]) {
 .sp-commit-sha { flex: none; font-family: ui-monospace, Consolas, monospace; color: var(--accent); }
 .sp-commit-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .sp-commit-time { flex: none; color: var(--muted); font-size: 10.5px; }
+
+/* Git 面板里只读的「最近修改文件」行 */
+.sp-file-static { cursor: default; }
+.sp-file-static:hover { background: transparent; border-color: var(--line); }

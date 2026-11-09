@@ -615,6 +615,14 @@ async function spRenderGit(body, node) {
     body.innerHTML = '<div class="sp-empty">这个任务还没有可扫描的工作目录</div>';
     return;
   }
+  // 顺手把侧栏顶部的 Git 胶囊刷新一下，保持同一份事实
+  if (currentTask) {
+    currentTask.project = {
+      cwd: p.cwd, isGit: p.isGit, branch: p.branch, head: p.head, headAt: p.headAt,
+      dirtyCount: p.dirtyCount, lastChangeAt: p.lastChangeAt,
+    };
+    try { renderProjectChip(); } catch { /* board 未渲染时忽略 */ }
+  }
   if (!p.isGit) {
     body.innerHTML = `<div class="sp-empty">这个目录不是 git 仓库<br /><span class="sp-dim">${escapeHtml(p.cwd || '')}</span></div>`;
     return;
@@ -669,16 +677,20 @@ async function spRenderGit(body, node) {
         <span class="sp-commit-time">${fmtTime(c.at)}</span>
       </div>`).join('')}</div>` : '<div class="sp-empty">没有提交记录</div>'}
 
-    <div class="sp-actions">
-      <button type="button" class="btn-ghost" data-git-modal>打开详细弹窗</button>
-    </div>`;
+    ${(p.recentFiles || []).length ? `
+      <div class="sp-subtitle">最近修改文件</div>
+      <div class="sp-list">${p.recentFiles.slice(0, 12).map((f) => `
+        <div class="sp-file sp-file-static" title="${escapeHtml(f.path || '')}">
+          <span class="sp-file-path">${escapeHtml(f.path || '')}</span>
+          <span class="sp-dim">${fmtTime(new Date(f.mtime || 0).toISOString())}</span>
+        </div>`).join('')}</div>` : ''}
+  `;
 
   body.querySelector('[data-git-refresh]')?.addEventListener('click', () => {
     spState.gitRefresh = true;
     spLastKey = '';
     spRender();
   });
-  body.querySelector('[data-git-modal]')?.addEventListener('click', () => openProjectModal());
   body.querySelectorAll('[data-git-file]').forEach((btn) => {
     btn.addEventListener('click', () => {
       spState.gitFile = btn.dataset.gitFile;
@@ -736,7 +748,6 @@ async function spRenderWorktree(body, node) {
     <div class="sp-kv"><span>路径</span><code class="sp-path">${escapeHtml(info.path)}</code></div>
     <div class="sp-actions">
       <button type="button" class="btn-primary" data-sp-merge ${info.merged || info.dirtyCount || !info.ahead ? 'disabled' : ''}>合并到 ${escapeHtml(info.base || '主分支')}</button>
-      <button type="button" class="btn-ghost" data-sp-open>打开完整弹窗</button>
     </div>
     <div class="sp-subtitle">worktree 里的改动${files.length ? ` · ${files.length}` : ''}</div>
     ${files.length ? `<div class="sp-list">${files.map((f) => {
@@ -746,7 +757,7 @@ async function spRenderWorktree(body, node) {
         <span class="sp-file-status s-${kind}">${escapeHtml(f.label)}</span>
         <span class="sp-file-path">${escapeHtml(f.path)}</span>
       </button>`;
-    }).join('')}</div>` : `<div class="sp-empty">${info.dirtyCount ? '改动列表读取失败，可打开完整弹窗查看' : '没有未提交改动'}</div>`}`;
+    }).join('')}</div>` : `<div class="sp-empty">${info.dirtyCount ? '改动列表读取失败，稍后重试' : '没有未提交改动'}</div>`}`;
   body.querySelectorAll('[data-wt-file]').forEach((btn) => {
     btn.addEventListener('click', () => {
       spState.wtFile = btn.dataset.wtFile;
@@ -754,7 +765,6 @@ async function spRenderWorktree(body, node) {
       spRender();
     });
   });
-  body.querySelector('[data-sp-open]')?.addEventListener('click', () => openWorktreeModal(node));
   body.querySelector('[data-sp-merge]')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
