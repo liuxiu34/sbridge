@@ -430,8 +430,8 @@ function renderProjectChip() {
   el.hidden = false;
   el.classList.toggle('warn', external || p.dirtyCount > 0);
   el.innerHTML = icon('git', 13) + ' ' + escapeHtml(bits.join(' · '));
-  el.title = `项目现状：${bits.join('，')}${p.lastChangeAt ? ` · 最近改动 ${fmtTime(p.lastChangeAt)}` : ''}\n不受工具限制：这里读的是工作区事实。点击看 git / 文件详情`;
-  el.onclick = () => openProjectModal();
+  el.title = `项目现状：${bits.join('，')}${p.lastChangeAt ? ` · 最近改动 ${fmtTime(p.lastChangeAt)}` : ''}\n不受工具限制：这里读的是工作区事实。点击在右侧面板看完整 Git（改动、diff、最近提交）`;
+  el.onclick = () => openSidePanel('git');
 }
 
 function projectHtml(r) {

@@ -3,13 +3,14 @@
 
 const SP_ITEMS = [
   { id: 'side', icon: 'chat', label: '侧边对话', key: 'S', hint: '基于当前会话上下文开一条独立对话，和主会话同时进行' },
+  { id: 'git', icon: 'git', label: 'Git', key: 'G', hint: '当前项目的分支、未提交改动、逐文件 diff 与最近提交' },
   { id: 'diff', icon: 'diff', label: '改动', key: 'D', hint: '当前会话目录的 git 改动与逐文件 diff' },
   { id: 'files', icon: 'folder', label: '文件', key: 'F', hint: '浏览会话目录，点文件看文本内容' },
   { id: 'context', icon: 'context', label: '上下文', key: 'C', hint: '这个任务已被捕获的认知与证据' },
   { id: 'worktree', icon: 'git', label: 'Worktree', key: 'W', hint: '独立工作区的分支状态与合并' },
 ];
 
-const spState = { open: false, surface: null, dir: '', file: null, wtFile: null };
+const spState = { open: false, surface: null, dir: '', file: null, wtFile: null, gitFile: null, gitRefresh: false };
 let spLastKey = '';
 
 /* 侧边对话运行时状态：独立会话 + 自己的 SSE 流，面板关闭/切换时回收 */
@@ -29,7 +30,9 @@ function refreshSidePanel(force = false) {
   // 侧边对话是并行会话：不跟当前标签走，否则切个标签就把对话流打断
   const key = spState.surface === 'side'
     ? `side|${currentTask?.id || ''}|${spChat.nodeId || ''}`
-    : `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
+    : spState.surface === 'git'
+      ? `git|${currentTask?.id || ''}|${spState.gitFile || ''}`
+      : `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
   if (!force && key === spLastKey) return;
   spLastKey = key;
   spRender();
@@ -107,6 +110,7 @@ function openSidePanel(id) {
   spState.dir = '';
   spState.file = null;
   spState.wtFile = null;
+  spState.gitFile = null;
   spLastKey = '';
   toggleSidePanel(true);
   spRender();
@@ -117,6 +121,7 @@ function spBack() {
   spState.dir = '';
   spState.file = null;
   spState.wtFile = null;
+  spState.gitFile = null;
   spLastKey = '';
   spRender();
 }
@@ -127,7 +132,9 @@ async function spRender() {
   // 记录本次渲染的签名：renderTabs 频繁触发 refreshSidePanel，签名一致就不再重绘（防闪烁）
   spLastKey = spState.surface === 'side'
     ? `side|${currentTask?.id || ''}|${spChat.nodeId || ''}`
-    : `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
+    : spState.surface === 'git'
+      ? `git|${currentTask?.id || ''}|${spState.gitFile || ''}`
+      : `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
   if (spState.surface !== 'side') spUnmountSide();
   const node = currentPanelNode();
   const item = SP_ITEMS.find((i) => i.id === spState.surface);
@@ -135,13 +142,14 @@ async function spRender() {
   $('sp-title').textContent = item ? item.label : '面板';
 
   if (!spState.surface) return spRenderLauncher(body);
-  if (!node) {
+  if (!node && spState.surface !== 'git') {
     body.innerHTML = '<div class="sp-empty">先打开一个会话，面板会跟随当前会话</div>';
     return;
   }
   body.innerHTML = '<div class="sp-loading">加载中…</div>';
   try {
     if (spState.surface === 'side') return spRenderSide(body, node);
+    if (spState.surface === 'git') return await spRenderGit(body, node);
     if (spState.surface === 'diff') return await spRenderDiff(body, node);
     if (spState.surface === 'files') return await spRenderFiles(body, node);
     if (spState.surface === 'context') return await spRenderContext(body, node);
@@ -585,6 +593,99 @@ async function spRenderContext(body, node) {
   }
   const data = await api(`/api/tasks/${currentTask.id}/context`);
   body.innerHTML = `<pre class="sp-code">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+}
+
+/* ---------- Git（项目级完整视图） ---------- */
+function spDiffLines(diff) {
+  return String(diff || '').split('\n').slice(0, 2000).map((l) => {
+    const cls = l.startsWith('+++') || l.startsWith('---') ? 'diff-head'
+      : l.startsWith('+') ? 'diff-add'
+        : l.startsWith('-') ? 'diff-del'
+          : l.startsWith('@@') ? 'diff-hunk' : '';
+    return `<span class="dl-line ${cls}">${escapeHtml(l) || ' '}</span>`;
+  }).join('');
+}
+
+async function spRenderGit(body, node) {
+  const q = spState.gitRefresh ? '?refresh=1' : '';
+  spState.gitRefresh = false;
+  const data = await api(`/api/tasks/${currentTask.id}/project-state${q}`);
+  const p = data?.project;
+  if (!p) {
+    body.innerHTML = '<div class="sp-empty">这个任务还没有可扫描的工作目录</div>';
+    return;
+  }
+  if (!p.isGit) {
+    body.innerHTML = `<div class="sp-empty">这个目录不是 git 仓库<br /><span class="sp-dim">${escapeHtml(p.cwd || '')}</span></div>`;
+    return;
+  }
+
+  if (spState.gitFile) {
+    const d = await api(`/api/tasks/${currentTask.id}/git-diff?cwd=${encodeURIComponent(p.cwd || '')}&path=${encodeURIComponent(spState.gitFile)}`);
+    body.innerHTML = `
+      <div class="sp-file-head">
+        <button type="button" class="sp-link" data-git-back>← Git</button>
+        <span class="sp-file-name" title="${escapeHtml(d.file || '')}">${escapeHtml(d.file || '')}</span>
+      </div>
+      <div class="sp-meta">+${d.added || 0} / -${d.deleted || 0}${d.truncated ? ' · 已截断' : ''}</div>
+      <pre class="sp-diff">${spDiffLines(d.diff)}</pre>`;
+    body.querySelector('[data-git-back]')?.addEventListener('click', () => {
+      spState.gitFile = null;
+      spLastKey = '';
+      spRender();
+    });
+    return;
+  }
+
+  const dirty = p.dirty || [];
+  const commits = p.recentCommits || [];
+  body.innerHTML = `
+    <div class="sp-meta">
+      <span class="sp-branch">${escapeHtml(p.branch || '(no branch)')}</span>
+      <span class="sp-dim">${p.head ? `@${escapeHtml(p.head)}` : ''}</span>
+      <button type="button" class="sp-link sp-git-refresh" data-git-refresh>刷新</button>
+    </div>
+    <div class="sp-kv"><span>最近提交</span><b>${p.headAt ? fmtTime(p.headAt) : '—'}</b></div>
+    <div class="sp-kv"><span>未提交</span><b class="${p.dirtyCount ? 'sp-warn' : ''}">${p.dirtyCount || 0} 个文件</b></div>
+    <div class="sp-kv"><span>目录</span><code class="sp-path">${escapeHtml(p.cwd || '')}</code></div>
+
+    <div class="sp-subtitle">未提交改动${dirty.length ? ` · ${dirty.length}` : ''}</div>
+    ${dirty.length ? `<div class="sp-list">${dirty.slice(0, 200).map((f) => {
+      const kind = f.code === '??' ? 'N' : String(f.code || '').includes('D') ? 'D' : 'M';
+      return `
+      <button type="button" class="sp-file" data-git-file="${escapeHtml(f.path)}" title="${escapeHtml(f.path)}">
+        <span class="sp-file-status s-${kind}">${escapeHtml(f.code || '')}</span>
+        <span class="sp-file-path">${escapeHtml(f.path)}</span>
+      </button>`;
+    }).join('')}</div>` : '<div class="sp-empty">工作区干净</div>'}
+
+    ${p.diffStat ? `<div class="sp-subtitle">改动规模</div><pre class="sp-stat">${escapeHtml(p.diffStat)}</pre>` : ''}
+
+    <div class="sp-subtitle">最近提交${commits.length ? ` · ${commits.length}` : ''}</div>
+    ${commits.length ? `<div class="sp-commits">${commits.map((c) => `
+      <div class="sp-commit">
+        <span class="sp-commit-sha">${escapeHtml(c.sha || '')}</span>
+        <span class="sp-commit-subject">${escapeHtml(c.subject || '')}</span>
+        <span class="sp-commit-time">${fmtTime(c.at)}</span>
+      </div>`).join('')}</div>` : '<div class="sp-empty">没有提交记录</div>'}
+
+    <div class="sp-actions">
+      <button type="button" class="btn-ghost" data-git-modal>打开详细弹窗</button>
+    </div>`;
+
+  body.querySelector('[data-git-refresh]')?.addEventListener('click', () => {
+    spState.gitRefresh = true;
+    spLastKey = '';
+    spRender();
+  });
+  body.querySelector('[data-git-modal]')?.addEventListener('click', () => openProjectModal());
+  body.querySelectorAll('[data-git-file]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      spState.gitFile = btn.dataset.gitFile;
+      spLastKey = '';
+      spRender();
+    });
+  });
 }
 
 /* ---------- Worktree ---------- */
