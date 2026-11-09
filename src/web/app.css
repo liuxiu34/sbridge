@@ -1585,10 +1585,25 @@ pre.mermaid:not([data-processed]) {
 }
 .wt-warn { color: var(--danger); }
 
-/* 覆盖代码块的黑底：mermaid 图表跟随面板底色（含助手气泡里的强选择器） */
+/* mermaid 图表容器：固定在面板底色，绝不继承代码块黑底 */
 .sev-text pre.mermaid,
 .chat-bubble pre.mermaid,
 .chat-msg.is-assistant .sev-text pre.mermaid,
 .chat-msg.is-user .sev-text pre.mermaid {
-  background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  margin: 12px 0 !important;
+  padding: 16px 14px !important;
+  background: var(--panel) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 14px !important;
+  color: var(--text) !important;
+  overflow: auto !important;
+  text-align: center !important;
+  box-shadow: var(--shadow-sm);
+}
+.sev-text pre.mermaid svg,
+.chat-bubble pre.mermaid svg {
+  max-height: 420px;
+  height: auto;
+  display: inline-block;
+  vertical-align: middle;
 }
