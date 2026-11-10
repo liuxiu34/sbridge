@@ -54,7 +54,7 @@ function createTaskFlow(projectId = null) {
     bodyHtml: `
       <div class="field"><label>任务标题</label><input id="f-title" placeholder="例如：修复 3D 卡片消失问题" autocomplete="off" /></div>
       <div class="field"><label>归属</label>
-        <select id="f-project" style="width:100%;padding:9px 11px;border:1px solid var(--line-strong);border-radius:9px;font:inherit;font-size:13px">
+        <select id="f-project" class="sb-select">
           <option value="">独立任务（不放进项目文件夹）</option>
           ${options}
         </select>

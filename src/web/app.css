@@ -1003,6 +1003,30 @@ html, body {
 
 .field { margin-bottom: 12px; }
 .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+/* 归属下拉：原生 select 的弹层默认是方角 + 系统蓝底，用 customizable select 统一成圆角卡片 */
+.sb-select {
+  appearance: base-select;
+  width: 100%; padding: 9px 11px;
+  border: 1px solid var(--line-strong); border-radius: 9px;
+  background: var(--panel); color: var(--text); font: inherit; font-size: 13px;
+  cursor: pointer;
+}
+.sb-select:hover { border-color: var(--muted); }
+.sb-select::picker-icon { color: var(--muted); }
+.sb-select::picker(select) {
+  appearance: base-select;
+  margin-top: 6px; padding: 5px;
+  border: 1px solid var(--line-strong); border-radius: 11px;
+  background: var(--panel); box-shadow: var(--shadow-md);
+  max-height: 320px; overflow-y: auto;
+}
+.sb-select option {
+  padding: 8px 10px; border-radius: 7px;
+  background: transparent; color: var(--text); font-size: 13px;
+  white-space: nowrap;
+}
+.sb-select option:hover, .sb-select option:focus { background: var(--hover-soft); }
+.sb-select option:checked { background: var(--accent-soft); color: var(--accent); font-weight: 560; }
 .field input, .field textarea {
   width: 100%; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 9px;
   font: inherit; font-size: 13px; outline: none; background: var(--panel);
