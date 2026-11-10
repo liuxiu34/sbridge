@@ -97,11 +97,38 @@ export function updateTask(db, id, patch) {
   return task;
 }
 
-export function deleteTask(db, id) {
-  const before = db.tasks.length;
-  db.tasks = db.tasks.filter((t) => t.id !== id);
+/* 归档 / 恢复：不再做物理删除。归档只打时间戳，节点与分支链、会话文件都原样保留，
+   恢复时把时间戳去掉即可回到原位（父节点仍归档时该会话按根节点展示）。 */
+export function archiveNode(db, taskId, nodeId, archived = true) {
+  const task = db.tasks.find((t) => t.id === taskId);
+  const node = task?.nodes.find((n) => n.id === nodeId);
+  if (!node) return false;
+  if (archived) node.archivedAt = new Date().toISOString();
+  else delete node.archivedAt;
+  task.updatedAt = new Date().toISOString();
   save(db);
-  return db.tasks.length !== before;
+  return true;
+}
+
+/** 全部已归档会话（跨任务），按归档时间倒序 */
+export function listArchived(db) {
+  const items = [];
+  for (const t of db.tasks) {
+    for (const n of t.nodes || []) {
+      if (!n.archivedAt) continue;
+      items.push({
+        taskId: t.id,
+        taskTitle: t.title,
+        nodeId: n.id,
+        tool: n.tool,
+        title: n.title || '(会话)',
+        cwd: n.cwd || '',
+        sessionId: n.sessionId || '',
+        archivedAt: n.archivedAt,
+      });
+    }
+  }
+  return items.sort((a, b) => String(b.archivedAt).localeCompare(String(a.archivedAt)));
 }
 
 export function addNode(db, taskId, node) {
@@ -112,18 +139,6 @@ export function addNode(db, taskId, node) {
   task.updatedAt = new Date().toISOString();
   save(db);
   return full;
-}
-
-export function removeNode(db, taskId, nodeId) {
-  const task = db.tasks.find((t) => t.id === taskId);
-  if (!task) return false;
-  const removed = task.nodes.find((n) => n.id === nodeId);
-  const before = task.nodes.length;
-  task.nodes = task.nodes.filter((n) => n.id !== nodeId);
-  // 只移除看板记录，本地会话文件一律不碰；分支链不能断：子会话接到被移除会话的上级
-  if (removed) for (const n of task.nodes) if (n.parentNodeId === nodeId) n.parentNodeId = removed.parentNodeId || null;
-  save(db);
-  return task.nodes.length !== before;
 }
 
 export function dataFilePath() {

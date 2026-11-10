@@ -55,7 +55,6 @@ $('btn-discover').onclick = async () => {
 };
 $('btn-launch').onclick = () => { if (currentTask) launchFlow(); };
 $('btn-attach').onclick = () => attachFlow();
-$('btn-term-close').onclick = () => openTermCloseModal();
 // 会话标签：激活 / 关闭
 $('sess-tabs').addEventListener('click', (e) => {
   const closeBtn = e.target.closest('[data-close]');
@@ -66,7 +65,7 @@ $('sess-tabs').addEventListener('click', (e) => {
   else openSessionTab(tab.dataset.tab);
 });
 $('btn-split').onclick = () => toggleSplit();
-/* 顶栏「更多」折叠菜单：白板 / 分屏常驻，新开会话、接入、标记完成、删除任务收进菜单 */
+/* 顶栏「更多」折叠菜单：只放新开会话、接入已有会话（其余常驻按钮不放这里） */
 (function bindMoreMenu() {
   const wrap = $('more-wrap');
   const menu = $('more-menu');
@@ -92,21 +91,4 @@ $('split-right').onchange = (e) => {
 // 白板视图切换（顶栏按钮 + 侧栏链接）
 $('btn-board-view2').onclick = () => toggleBoardView();
 $('btn-board-view').onclick = () => toggleBoardView();
-$('btn-status').onclick = async () => {
-  if (!currentTask) return;
-  const status = currentTask.status === 'done' ? 'active' : 'done';
-  await api(`/api/tasks/${currentTask.id}`, { method: 'PATCH', body: { status } });
-  await refreshTask();
-};
-$('btn-delete-task').onclick = async () => {
-  if (!currentTask) return;
-  if (!confirm(`删除任务「${currentTask.title}」？本地会话文件不会被删除。`)) return;
-  await api(`/api/tasks/${currentTask.id}`, { method: 'DELETE' });
-  currentTask = null;
-  currentTaskId = null;
-  closeAllPanes();
-  renderPanes();
-  await loadState();
-  renderBoard();
-};
 

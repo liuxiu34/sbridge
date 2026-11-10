@@ -48,6 +48,11 @@ function openSettingsModal() {
         <span class="set-text"><span class="pick-title">环境诊断</span>
         <span class="pick-sub">检查 Codex / Pi / Claude Code 是否安装、会话目录与登录/密钥配置；只读检测，不改任何配置</span></span>
         <button type="button" class="btn-ghost" id="set-envcheck">${icon('radar')} 检查</button>
+      </div>
+      <div class="set-row">
+        <span class="set-text"><span class="pick-title">归档</span>
+        <span class="pick-sub">看板上归档掉的会话都收在这里，随时可以恢复到原来的任务</span></span>
+        <button type="button" class="btn-ghost" id="set-archive">${icon('archive')} 查看</button>
       </div>`,
     submitLabel: '保存',
     onSubmit: () => {
@@ -60,6 +65,7 @@ function openSettingsModal() {
   });
   $('set-envcheck').onclick = () => { close(); openEnvCheckModal(); };
   $('set-toolchain').onclick = () => { close(); openToolchainModal(); };
+  $('set-archive').onclick = () => { close(); openArchiveModal(); };
 }
 
 /* ---------- 赞助入口：填好链接后侧栏才会出现「♥ 支持」 ---------- */
@@ -448,7 +454,7 @@ const ICONS = {
   sun: '<circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v1.9M12 19.5v1.9M2.6 12h1.9M19.5 12h1.9M5.3 5.3l1.35 1.35M17.35 17.35l1.35 1.35M5.3 18.7l1.35-1.35M17.35 6.65l1.35-1.35"/>',
   moon: '<path d="M20.5 13.2A8.5 8.5 0 1 1 10.8 3.5a6.8 6.8 0 0 0 9.7 9.7z"/>',
   check: '<path d="M4.5 12.5l5 5L20 7"/>',                                          // 标记完成
-  trash: '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13.5h9l1-13.5"/>',                 // 删除
+  archive: '<rect x="3.5" y="4.5" width="17" height="4.2" rx="1.4"/><path d="M5.3 8.7V18a1.8 1.8 0 0 0 1.8 1.8h9.8a1.8 1.8 0 0 0 1.8-1.8V8.7"/><path d="M9.8 12.6h4.4"/>', // 归档
   link: '<path d="M10.5 13.5a4.5 4.5 0 0 0 6.4 0l2.8-2.8a4.5 4.5 0 0 0-6.4-6.4L11.9 5.7"/><path d="M13.5 10.5a4.5 4.5 0 0 0-6.4 0l-2.8 2.8a4.5 4.5 0 0 0 6.4 6.4l1.4-1.4"/>', // 接入
   chat: '<path d="M21 12a8.5 8.5 0 0 1-8.5 8.5c-1.5 0-3-.4-4.2-1L3 21l1.6-4.4A8.5 8.5 0 1 1 21 12z"/>', // 新开会话
   radar: '<path d="M19.07 4.93a10 10 0 1 0 .43 10.24"/><path d="M16.24 7.76a6 6 0 1 0 .36 6.14"/><circle cx="12" cy="12" r="1.6"/>', // 自动获取扫描

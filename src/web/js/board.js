@@ -100,7 +100,6 @@ function renderBoard() {
   $('empty').style.display = nodes.length ? 'none' : 'flex';
   $('task-actions').hidden = !currentTask;
   renderProjectChip();
-  $('btn-status').innerHTML = currentTask?.status === 'done' ? (icon('play') + ' 恢复进行中') : (icon('check') + ' 标记完成');
 
   if (!currentTask || !nodes.length) {
     cardsEl.innerHTML = '';
@@ -224,23 +223,23 @@ async function stopNodeTerm(node) {
   } catch (err) { toast(err.message); }
 }
 
-/** 从任务移除会话：只删看板记录，本地会话文件一律不动；分支子会话自动接到上一级 */
-async function removeTaskNodes(ids) {
+/** 归档会话：从看板隐去记录，本地会话文件与分支链原样保留；可在「设置 → 归档」恢复 */
+async function archiveTaskNodes(ids) {
   if (!currentTask || !ids?.length) return;
   const nodes = ids.map((nid) => findNode(nid)).filter(Boolean);
   if (!nodes.length) return;
   const label = nodes.length === 1
     ? `会话「${truncate(nodes[0].title || '(会话)', 30)}」`
     : `选中的 ${nodes.length} 个会话`;
-  if (!confirm(`从任务移除${label}？\n\n只移除看板记录，不会删除任何本地会话文件；分支链上的子会话会自动接到上一级。`)) return;
+  if (!confirm(`归档${label}？\n\n归档后从看板/侧栏隐藏，本地会话文件不会删除；随时可在「设置 → 归档」里恢复。`)) return;
   try {
     for (const nid of nodes.map((n) => n.id)) {
-      await api(`/api/tasks/${currentTask.id}/nodes/${nid}`, { method: 'DELETE' });
+      await api(`/api/tasks/${currentTask.id}/nodes/${nid}/archive`, { method: 'POST' });
       if (openTabs.includes(nid)) closeTab(nid);
     }
     if (boardMode) clearBoardSelection();
     await refreshTask();
-    toast(`已移除 ${nodes.length} 个会话（本地文件未删除）`);
+    toast(`已归档 ${nodes.length} 个会话（设置 → 归档 可恢复）`);
   } catch (err) { toast(err.message); }
 }
 
@@ -255,12 +254,11 @@ function openBoardMenu(nodeId, x, y) {
     { icon: 'handoff', label: '接力（生成检查点，换工具继续）', run: () => openHandoffModal(node) },
     { icon: 'timeline', label: '打开工作轨迹', run: () => openSessionTab(node.id) },
     { icon: 'split', label: '分屏打开', run: () => openInOtherSlot(node.id) },
-    { icon: 'context', label: '会话上下文', run: () => openCtxModal(node) },
     { icon: 'download', label: '导出 Markdown（只读）', run: () => exportNodeMarkdown(node) },
     /[\\/]\.sbridge-worktrees[\\/]/i.test(String(node.cwd || ''))
       ? { icon: 'git', label: '在右侧面板查看 Worktree', run: () => { openSessionTab(node.id); openSidePanel('worktree'); } } : null,
     running ? { icon: 'stop', label: '停止终端', danger: true, run: () => stopNodeTerm(node) } : null,
-    { icon: 'trash', label: `从任务移除${boardSel.size > 1 ? `选中的 ${boardSel.size} 个会话` : '会话'}（不删本地文件）`, danger: true, run: () => removeTaskNodes([...boardSel]) },
+    { icon: 'archive', label: `归档${boardSel.size > 1 ? `选中的 ${boardSel.size} 个会话` : '会话'}`, run: () => archiveTaskNodes([...boardSel]) },
     opened ? { icon: 'x', label: '关闭标签', run: () => closeTab(node.id) } : null,
   ].filter(Boolean);
   const el = document.createElement('div');

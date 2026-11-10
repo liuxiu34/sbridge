@@ -576,65 +576,60 @@ function openEnvCheckModal() {
   return close;
 }
 
-/** 一键关闭终端：全部关闭，或只关某一个工具（Codex / Pi / Claude Code）的所有终端 */
-function openTermCloseModal() {
-  let runningByTool = {};
+/** 设置 → 归档：列出全部已归档会话，可恢复到原任务（归档只隐藏，不删会话文件） */
+function openArchiveModal() {
   const close = openModal({
-    title: '关闭终端',
+    title: '归档',
     bodyHtml: `
-      <div class="term-close-head">
-        <span id="term-close-sum">正在读取终端状态…</span>
-        <button type="button" class="btn-primary" id="term-kill-all" disabled>全部关闭</button>
-      </div>
-      <div id="term-close-list"></div>`,
+      <div class="hint" id="arc-hint" style="color:#9a9aa4;margin-bottom:8px">正在读取…</div>
+      <div id="arc-list"><div class="empty-tree">加载中…</div></div>`,
     submitLabel: '',
   });
 
   const render = async () => {
-    let terms = [];
-    try { terms = (await api('/api/terms')).terms || []; } catch (err) {
-      const list = $('term-close-list');
-      if (list) list.innerHTML = `<div class="empty-tree">读取终端失败：${escapeHtml(err.message)}</div>`;
+    const list = $('arc-list');
+    if (!list) return;
+    let items = [];
+    try {
+      items = (await api('/api/archive')).items || [];
+    } catch (err) {
+      list.innerHTML = `<div class="empty-tree">读取失败：${escapeHtml(err.message)}</div>`;
       return;
     }
-    const tools = state.tools?.length ? state.tools : DEFAULT_TOOLS;
-    const running = terms.filter((t) => t.running);
-    runningByTool = {};
-    for (const t of running) runningByTool[t.tool] = (runningByTool[t.tool] || 0) + 1;
-    const total = running.length;
-    if ($('term-close-sum')) $('term-close-sum').textContent = total ? `当前有 ${total} 个终端在运行` : '当前没有运行中的终端';
-    if ($('term-kill-all')) $('term-kill-all').disabled = !total;
-    const list = $('term-close-list');
-    if (!list) return;
-    list.innerHTML = tools.map((t) => {
-      const n = runningByTool[t.id] || 0;
-      return `<div class="set-row">
+    if ($('arc-hint')) {
+      $('arc-hint').textContent = items.length
+        ? `共 ${items.length} 个归档会话，恢复后回到原任务`
+        : '还没有归档的会话';
+    }
+    if (!items.length) {
+      list.innerHTML = '<div class="empty-tree">暂无归档会话。在白板里右键会话选「归档」，就会收在这里。</div>';
+      return;
+    }
+    list.innerHTML = items.map((it, i) => `
+      <div class="set-row">
         <span class="set-text">
-          <span class="pick-title"><span class="chip ${t.id}">${escapeHtml(t.label)}</span></span>
-          <span class="pick-sub">${n ? `${n} 个终端运行中` : '没有运行中的终端'}</span>
+          <span class="pick-title"><span class="chip ${escapeHtml(it.tool)}">${escapeHtml(toolLabel(it.tool))}</span> ${escapeHtml(it.title)}</span>
+          <span class="pick-sub">${escapeHtml(it.taskTitle || '')} · 归档于 ${escapeHtml(fmtTime(it.archivedAt))}</span>
         </span>
-        <button type="button" class="btn-ghost" data-kill-tool="${t.id}" ${n ? '' : 'disabled'}>关闭</button>
-      </div>`;
-    }).join('');
-    list.querySelectorAll('[data-kill-tool]').forEach((btn) => {
-      btn.onclick = () => killAllTerms(btn.dataset.killTool);
+        <button type="button" class="btn-ghost" data-restore="${i}">恢复</button>
+      </div>`).join('');
+    list.querySelectorAll('[data-restore]').forEach((btn) => {
+      btn.onclick = async () => {
+        const it = items[Number(btn.dataset.restore)];
+        btn.disabled = true;
+        try {
+          await api(`/api/tasks/${it.taskId}/nodes/${it.nodeId}/restore`, { method: 'POST' });
+          toast(`已恢复「${truncate(it.title, 24)}」`);
+          await render();
+          await loadState();
+          if (currentTask) await refreshTask();
+        } catch (err) {
+          btn.disabled = false;
+          toast(err.message);
+        }
+      };
     });
   };
-
-  const killAllTerms = async (tool) => {
-    const n = tool ? (runningByTool[tool] || 0) : Object.values(runningByTool).reduce((a, b) => a + b, 0);
-    if (!n) { toast('没有运行中的终端'); return; }
-    const label = tool ? `${toolLabel(tool)} 的` : '全部工具的';
-    if (!confirm(`关闭${label} ${n} 个终端？正在运行的 agent 会被终止；会话文件保留，可重新启动终端恢复。`)) return;
-    try {
-      const r = await api('/api/terms/kill-all', { method: 'POST', body: tool ? { tool } : {} });
-      toast(`已关闭 ${r.killed} 个终端`);
-      try { refreshTermIndicators(); } catch { /* ignore */ }
-      await render();
-    } catch (err) { toast(err.message); }
-  };
-
-  $('term-kill-all').onclick = () => killAllTerms(null);
   render();
   return close;
 }

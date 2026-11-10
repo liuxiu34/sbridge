@@ -191,18 +191,22 @@ function makeNode(toolName, conv, extra = {}) {
 function buildState(db) {
   return {
     projects: db.projects,
-    tasks: db.tasks.map((t) => ({
-      id: t.id,
-      projectId: t.projectId,
-      title: t.title,
-      status: t.status,
-      note: t.note,
-      createdAt: t.createdAt,
-      updatedAt: t.updatedAt,
-      nodeCount: t.nodes.length,
-      tools: [...new Set(t.nodes.map((n) => n.tool))],
-      lastTool: t.nodes.length ? t.nodes[t.nodes.length - 1].tool : null,
-    })),
+    // 归档的会话不出现在侧栏/看板统计里（数据仍在任务里，可在「设置 → 归档」恢复）
+    tasks: db.tasks.map((t) => {
+      const nodes = (t.nodes || []).filter((n) => !n.archivedAt);
+      return {
+        id: t.id,
+        projectId: t.projectId,
+        title: t.title,
+        status: t.status,
+        note: t.note,
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+        nodeCount: nodes.length,
+        tools: [...new Set(nodes.map((n) => n.tool))],
+        lastTool: nodes.length ? nodes[nodes.length - 1].tool : null,
+      };
+    }),
   };
 }
 
@@ -248,7 +252,7 @@ function computeCodeActivity(node) {
 function taskDetail(db, taskId) {
   const task = db.tasks.find((t) => t.id === taskId);
   if (!task) return null;
-  const nodes = task.nodes.map((n) => {
+  const nodes = task.nodes.filter((n) => !n.archivedAt).map((n) => {
     let lastActivity = null;
     // 会话文件的 mtime = 最后一次活动时间（包含闲聊，仅作兜底展示）
     try {
@@ -298,6 +302,11 @@ async function handleApi(req, res, url) {
   const [, resource, id, sub, subId, extra] = parts;
 
   if (req.method === 'GET' && resource === 'state') return json(res, 200, buildState(db));
+
+  /* 归档箱：所有被归档的会话（数据仍在任务里，恢复后回到原位） */
+  if (req.method === 'GET' && resource === 'archive' && !id) {
+    return json(res, 200, { items: store.listArchived(db) });
+  }
 
   /* 引用本地文件（浏览器降级路径）：桌面版走系统文件框拿真实路径，浏览器里把文件存到数据目录再给路径 */
   if (req.method === 'POST' && resource === 'upload') {
@@ -396,6 +405,7 @@ async function handleApi(req, res, url) {
         results.push({ type: 'task', taskId: t.id, title: t.title, projectName: projectName(t.projectId), nodeCount: (t.nodes || []).length, updatedAt: t.updatedAt });
       }
       for (const n of t.nodes || []) {
+        if (n.archivedAt) continue; // 归档会话不参与搜索
         const sum = n.summary || {};
         const fields = [
           ['标题', n.title || ''],
@@ -423,7 +433,7 @@ async function handleApi(req, res, url) {
       for (const t of db.tasks) {
         for (const n of t.nodes || []) {
           if (results.length >= limit) { truncated = true; break; }
-          if (matchedNodes.has(n.id) || !n.file || n.file.startsWith('sqlite:')) continue;
+          if (matchedNodes.has(n.id) || n.archivedAt || !n.file || n.file.startsWith('sqlite:')) continue;
           const parser = PARSERS[n.tool];
           if (!parser) continue;
           let st;
@@ -911,9 +921,7 @@ if (req.method === 'GET' && resource === 'stream') {
       const updated = store.updateTask(db, id, body);
       return updated ? json(res, 200, updated) : json(res, 404, { error: '任务不存在' });
     }
-    if (req.method === 'DELETE' && !sub) {
-      return json(res, 200, { ok: store.deleteTask(db, id) });
-    }
+    /* 看板不再提供物理删除：任务与会话都只做归档（会话可恢复，任务本身不删） */
 
     if (req.method === 'POST' && sub === 'launch') {
       const body = await readBody(req);
@@ -1565,8 +1573,10 @@ if (req.method === 'GET' && resource === 'stream') {
       }
     }
 
-    if (req.method === 'DELETE' && sub === 'nodes' && subId) {
-      return json(res, 200, { ok: store.removeNode(db, id, subId) });
+    /* 归档 / 恢复会话：只打时间戳，会话文件与分支链都不动 */
+    if (req.method === 'POST' && sub === 'nodes' && subId && (extra === 'archive' || extra === 'restore')) {
+      const ok = store.archiveNode(db, id, subId, extra === 'archive');
+      return ok ? json(res, 200, { ok }) : json(res, 404, { error: '会话不存在' });
     }
 
     if (req.method === 'POST' && sub === 'handoff') {
