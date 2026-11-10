@@ -157,12 +157,30 @@ function attachFlow() {
     submitLabel: '接入',
     onSubmit: async () => {
       if (!selected) throw new Error('请选择一条会话');
-      await api(`/api/tasks/${currentTask.id}/nodes`, {
+      const attach = (allowCreateProject) => api(`/api/tasks/${currentTask.id}/nodes`, {
         method: 'POST',
-        body: { tool, file: selected.file },
+        body: { tool, file: selected.file, allowCreateProject },
       });
-      await refreshTask();
-      toast('已接入会话');
+      let r = await attach(false);
+      if (r.needsProject) {
+        if (!confirm(`这个会话所在目录还没有项目文件夹：\n${r.cwd}\n\n要新建项目文件夹「${r.name}」并把它放进去吗？`)) {
+          throw new Error('已取消，未创建项目文件夹');
+        }
+        r = await attach(true);
+      }
+      if (!r.ok) throw new Error('接入失败');
+
+      const targetId = r.taskId || currentTask.id;
+      await loadState();
+      if (targetId !== currentTask?.id) await openTask(targetId);
+      else await refreshTask();
+      const nodeId = r.kind === 'attached' ? r.node?.id : r.nodeId;
+      if (nodeId) openSessionTab(nodeId);
+
+      if (r.kind === 'exists') toast(`该会话已在任务「${r.taskTitle}」里，已为你打开`);
+      else if (r.kind === 'restored') toast(`已从归档恢复，回到任务「${r.taskTitle}」`);
+      else if (r.createdProject) toast(`已创建项目文件夹「${r.createdProject.name}」，会话已放进去`);
+      else toast(`已接入到任务「${r.taskTitle}」`);
     },
   });
 
@@ -205,21 +223,33 @@ function attachFlow() {
             <span class="pick-group-name">${escapeHtml(dirLabel(dir))}</span>
             <span class="pick-group-path">${escapeHtml(dir)}</span>
           </div>
-          ${list.map(({ it, i }) => `
-          <div class="pick" data-idx="${i}">
+          ${list.map(({ it, i }) => {
+            // 已导入的默认不给接（减少重复卡片）；已归档的可以接，走的是「恢复」
+            const imported = it.status === 'imported';
+            const badge = imported
+              ? `<span class="pick-badge">已导入</span>`
+              : it.status === 'archived' ? `<span class="pick-badge archived">已归档</span>` : '';
+            return `
+          <div class="pick${imported ? ' is-disabled' : ''}" data-idx="${i}">
             <span class="pick-radio"></span>
             <div class="pick-main">
               <div class="pick-title">${escapeHtml(it.title)}</div>
-              <div class="pick-sub">${fmtTime(it.updatedAt)} · ${it.messageCount} 条 · ${escapeHtml((it.id || '').slice(0, 8))}</div>
-            </div>
-          </div>`).join('')}
+              <div class="pick-sub">${fmtTime(it.updatedAt)} · ${it.messageCount} 条 · ${escapeHtml((it.id || '').slice(0, 8))}${it.taskTitle ? ` · 已在「${escapeHtml(it.taskTitle)}」` : ''}</div>
+            </div>${badge}
+          </div>`;
+          }).join('')}
         </div>`).join('');
       $('pick-list').innerHTML = data.items.length ? groupHtml : `<div class="empty-tree">没有可接入的会话（${toolName} 本机共 ${data.totalAll} 条）</div>`;
       $('pick-list').querySelectorAll('[data-idx]').forEach((el) => {
+        const it = data.items[Number(el.dataset.idx)];
         el.addEventListener('click', () => {
+          if (it.status === 'imported') {
+            toast(`该会话已在任务「${it.taskTitle || '看板'}」里，无需重复接入`);
+            return;
+          }
           $('pick-list').querySelectorAll('.pick').forEach((x) => x.classList.remove('selected'));
           el.classList.add('selected');
-          selected = data.items[Number(el.dataset.idx)];
+          selected = it;
         });
       });
     } catch (err) {
