@@ -607,7 +607,20 @@ if (req.method === 'GET' && resource === 'stream') {
       ? all.filter((it) => it.cwd && expandPath(it.cwd).toLowerCase() === expandPath(cwd).toLowerCase())
       : all;
     const shown = filtered.slice(0, 50);
+    // 这个会话在看板里的状态：已导入（不可再接入）/ 已归档（接入=恢复）/ 新会话
+    const bySid = new Map();
+    for (const t of db.tasks) {
+      for (const n of t.nodes || []) {
+        if (!n.sessionId) continue;
+        const k = String(n.sessionId);
+        const rec = { taskId: t.id, taskTitle: t.title, nodeId: n.id, archived: !!n.archivedAt };
+        const cur = bySid.get(k);
+        if (!cur || (cur.archived && !rec.archived)) bySid.set(k, rec);
+      }
+    }
     const items = shown.map((it) => {
+      const hit = bySid.get(String(it.id));
+      const base = { status: hit ? (hit.archived ? 'archived' : 'imported') : 'new', taskId: hit?.taskId || null, taskTitle: hit?.taskTitle || null, nodeId: hit?.nodeId || null };
       try {
         const conv = tool.read(it.file);
         const firstUser = conv.messages.find((m) => m.role === 'user');
@@ -620,9 +633,10 @@ if (req.method === 'GET' && resource === 'stream') {
           title: truncate(firstUser?.text || '(无提问)', 70),
           messageCount: s.messageCount,
           tokens: s.tokens,
+          ...base,
         };
       } catch {
-        return { id: it.id, file: it.file, cwd: it.cwd, updatedAt: it.updatedAt, title: '(读取失败)', messageCount: 0, tokens: 0 };
+        return { id: it.id, file: it.file, cwd: it.cwd, updatedAt: it.updatedAt, title: '(读取失败)', messageCount: 0, tokens: 0, ...base };
       }
     });
     return json(res, 200, {
@@ -1116,13 +1130,77 @@ if (req.method === 'GET' && resource === 'stream') {
       if (!tool) return json(res, 400, { error: '未知工具' });
       const file = body.file || (body.sessionId ? findSessionFile(tool, body.sessionId) : null);
       if (!file) return json(res, 400, { error: '找不到该会话' });
-      try {
-        const conv = tool.read(file);
-        const node = store.addNode(db, id, makeNode(tool.name, conv, { parentNodeId: body.parentNodeId || null }));
-        return node ? json(res, 200, node) : json(res, 404, { error: '任务不存在' });
-      } catch (err) {
+      let conv;
+      try { conv = tool.read(file); } catch (err) {
         return json(res, 500, { error: `读取会话失败: ${err.message}` });
       }
+      // 子代理 / 分支场景：显式给了父节点，就挂到当前任务这条链上
+      if (body.parentNodeId) {
+        const node = store.addNode(db, id, makeNode(tool.name, conv, { parentNodeId: body.parentNodeId }));
+        return node ? json(res, 200, { ok: true, kind: 'attached', taskId: id, node }) : json(res, 404, { error: '任务不存在' });
+      }
+
+      const task = db.tasks.find((t) => t.id === id);
+      if (!task) return json(res, 404, { error: '任务不存在' });
+
+      /* 同一会话只允许在看板里存在一份：
+         已导入 → 告诉前端它在哪，不再重复建卡片；已归档 → 走恢复，回到它原来的任务 */
+      const sid = String(conv.id || '');
+      const hits = [];
+      for (const t of db.tasks) {
+        const n = (t.nodes || []).find((x) => x.sessionId && String(x.sessionId) === sid);
+        if (n) hits.push({ task: t, node: n });
+      }
+      const active = hits.find((x) => !x.node.archivedAt);
+      if (active) {
+        return json(res, 200, { ok: true, kind: 'exists', taskId: active.task.id, taskTitle: active.task.title, nodeId: active.node.id });
+      }
+      const archived = hits.find((x) => x.node.archivedAt);
+      if (archived) {
+        store.archiveNode(db, archived.task.id, archived.node.id, false);
+        return json(res, 200, { ok: true, kind: 'restored', taskId: archived.task.id, taskTitle: archived.task.title, nodeId: archived.node.id });
+      }
+
+      /* 新会话落位：优先放进它自己目录所属的项目文件夹（「自动获取 · 目录名」，
+         没有就现建），而不是塞到当前会话下面当子会话 */
+      const nodeCwd = conv.cwd ? expandPath(conv.cwd) : '';
+      const taskProject = db.projects.find((p) => p.id === task.projectId);
+      const belongsHere = !!nodeCwd && (
+        (task.nodes || []).some((n) => n.cwd && normDir(n.cwd) === normDir(nodeCwd))
+        || (taskProject?.cwd && normDir(taskProject.cwd) === normDir(nodeCwd))
+      );
+      let target = belongsHere ? task : null;
+      let createdProject = null;
+      if (!target && nodeCwd) {
+        const name = path.basename(nodeCwd) || nodeCwd;
+        let project = db.projects.find((p) => p.cwd && normDir(p.cwd) === normDir(nodeCwd));
+        if (!project) {
+          if (!body.allowCreateProject) {
+            return json(res, 200, { ok: false, needsProject: true, cwd: nodeCwd, name });
+          }
+          let display = name;
+          if (db.projects.some((p) => (p.name || '').toLowerCase() === display.toLowerCase())) {
+            const parent = path.basename(path.dirname(nodeCwd));
+            display = parent ? `${name} · ${parent}` : `${name} (${db.projects.length + 1})`;
+          }
+          project = store.createProject(db, display, nodeCwd);
+          createdProject = { id: project.id, name: project.name };
+        }
+        const taskTitle = `自动获取 · ${name}`;
+        target = db.tasks.find((t) => t.projectId === project.id && t.title === taskTitle)
+          || store.createTask(db, { projectId: project.id, title: taskTitle });
+      }
+      if (!target) target = task; // 读不出目录：只能留在当前任务
+      const node = store.addNode(db, target.id, makeNode(tool.name, conv));
+      return json(res, 200, {
+        ok: true,
+        kind: 'attached',
+        taskId: target.id,
+        taskTitle: target.title,
+        projectId: target.projectId || null,
+        createdProject,
+        node,
+      });
     }
 
     // 子代理修复记录（吸收 Paseo「可视化管理子代理」思路）：

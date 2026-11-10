@@ -1011,6 +1011,15 @@ html, body {
 .pick-radio { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--line-strong); flex: none; }
 .pick.selected .pick-radio { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 0 4px, transparent 4.5px); }
 .pick.selected { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(75, 71, 224, .10); }
+/* 接入列表右侧状态：已导入（不可再接入）/ 已归档（接入即恢复） */
+.pick.is-disabled { opacity: .55; cursor: default; }
+.pick.is-disabled:hover { border-color: var(--line); background: transparent; }
+.pick.is-disabled .pick-radio { border-style: dashed; }
+.pick-badge {
+  flex: none; font-size: 11px; padding: 2px 7px; border-radius: 6px;
+  background: var(--pill-soft); color: var(--muted); white-space: nowrap;
+}
+.pick-badge.archived { color: var(--accent); background: rgba(75, 71, 224, .10); }
 
 .field { margin-bottom: 12px; }
 .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
