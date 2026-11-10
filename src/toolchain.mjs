@@ -9,6 +9,8 @@ export const CLI_PACKAGES = {
   claude: { pkg: '@anthropic-ai/claude-code', cmd: 'claude', label: 'Claude Code' },
   codex: { pkg: '@openai/codex', cmd: 'codex', label: 'Codex' },
   pi: { pkg: '@earendil-works/pi-coding-agent', cmd: 'pi', label: 'Pi' },
+  // omp 的 CLI 需要 Bun 运行时，装卸都走 bun
+  omp: { pkg: '@oh-my-pi/pi-coding-agent', cmd: 'omp', label: 'Oh My Pi', manager: 'bun' },
 };
 
 export const PI_EXTENSIONS = [
@@ -95,11 +97,14 @@ export async function toolStatuses() {
   }));
 }
 
-/** 安装/更新到 npm 最新版 */
+/** 安装/更新到最新版（omp 走 bun，其它走 npm） */
 export async function updateTool(tool) {
   const meta = CLI_PACKAGES[tool];
   if (!meta) return { ok: false, error: '未知工具' };
-  const r = await run(`npm install -g ${meta.pkg}@latest`, 10 * 60 * 1000);
+  const cmd = meta.manager === 'bun'
+    ? `bun install -g ${meta.pkg}@latest`
+    : `npm install -g ${meta.pkg}@latest`;
+  const r = await run(cmd, 10 * 60 * 1000);
   const after = r.ok ? await installedInfo(tool) : null;
   return { ok: r.ok, output: String(r.output || '').slice(-1500), version: after?.version || null };
 }

@@ -152,7 +152,7 @@ function tailNewLines(file, offset) {
 }
 
 // 供会话流（SSE）复用：按工具解析会话行 → 展示事件
-export const PARSERS = { codex: parseCodexLine, pi: parsePiLine, claude: parseClaudeLine };
+export const PARSERS = { codex: parseCodexLine, pi: parsePiLine, claude: parseClaudeLine, omp: parsePiLine };
 
 /**
  * 对单个会话文件执行增量捕获。

@@ -17,6 +17,8 @@
   --pi-soft: #f1ebfe;
   --claude: #b45309;
   --claude-soft: #fdf1e3;
+  --omp: #2563c9;
+  --omp-soft: #e8f0fd;
   --danger: #c2410c;
   --scrollbar-thumb: #cfcbc1;
   --scrollbar-thumb-hover: #b9b4a8;
@@ -54,6 +56,8 @@ body.theme-dark {
   --pi-soft: #2b2342;
   --claude: #e09a4a;
   --claude-soft: #3a2b16;
+  --omp: #78a6f5;
+  --omp-soft: #1b2740;
   --danger: #e8734a;
   --danger-soft: #3a2018;
   --scrollbar-thumb: #3d3e45;
@@ -317,6 +321,7 @@ html, body {
 .chip.codex { color: var(--codex); background: var(--codex-soft); }
 .chip.pi { color: var(--pi); background: var(--pi-soft); }
 .chip.claude { color: var(--claude); background: var(--claude-soft); }
+.chip.omp { color: var(--omp); background: var(--omp-soft); }
 .chip.branch { color: var(--warn); background: var(--warn-soft); }
 .chip.handoff { color: var(--accent); background: var(--accent-soft); }
 
@@ -1451,6 +1456,7 @@ svg.ico { flex: none; vertical-align: -2px; }
 .chip.codex { background: var(--codex-soft); }
 .chip.pi { background: var(--pi-soft); }
 .chip.claude { background: var(--claude-soft); }
+.chip.omp { background: var(--omp-soft); }
 .chip.branch { background: var(--warn-soft); }
 .chip.handoff { background: var(--accent-soft); }
 

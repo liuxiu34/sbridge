@@ -8,6 +8,7 @@ import * as store from './store.mjs';
 import * as codex from './codex.mjs';
 import * as pi from './pi.mjs';
 import * as claude from './claude.mjs';
+import * as omp from './omp.mjs';
 import * as ctxdb from './context/db.mjs';
 import { captureTask, PARSERS, tailNewLines } from './context/capture.mjs';
 import { startAutoCapture } from './context/watcher.mjs';
@@ -27,9 +28,9 @@ import { expandPath, samePath, truncate, estimateTokens } from './util.mjs';
 import { IS_SEA, ROOT, WEB_DIR, DATA_DIR } from './paths.mjs';
 
 let PORT = Number(process.argv.find((a) => a.startsWith('--port='))?.split('=')[1] || 4310);
-const TOOLS = { codex, pi, claude };
-const TOOL_LABELS = { codex: 'Codex', pi: 'Pi', claude: 'Claude Code' };
-const LAUNCH_COMMANDS = { codex: 'codex', pi: 'pi', claude: 'claude' };
+const TOOLS = { codex, pi, claude, omp };
+const TOOL_LABELS = { codex: 'Codex', pi: 'Pi', claude: 'Claude Code', omp: 'Oh My Pi' };
+const LAUNCH_COMMANDS = { codex: 'codex', pi: 'pi', claude: 'claude', omp: 'omp' };
 // 目录比较用：大小写、斜杠、尾斜杠不敏感
 const normDir = (p) => String(p || '').replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
 
@@ -127,6 +128,10 @@ function readAuthHint(tool) {
       const cf = path.join(home, '.claude.json');
       if (fs.existsSync(cf) && fs.statSync(cf).size > 2) return { ok: true, detail: '.claude.json 存在（可能已登录）' };
     }
+    if (tool === 'omp') {
+      const f = path.join(home, '.omp', 'agent', 'models.yml');
+      if (fs.existsSync(f) && fs.statSync(f).size > 8) return { ok: true, detail: '~/.omp/agent/models.yml 已配置 provider' };
+    }
   } catch (e) { return { ok: false, detail: e.message }; }
   return { ok: false, detail: '未找到登录或密钥配置' };
 }
@@ -136,6 +141,7 @@ const RESUME_COMMANDS = {
   pi: (id) => `pi --session ${id}`,
   codex: (id) => `codex resume ${id}`,
   claude: (id) => `claude --resume ${id}`,
+  omp: (id) => `omp --resume ${id}`,
 };
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -330,10 +336,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && resource === 'tools' && !id) {
-    // 各工具内置/已装的「模式」：Claude、Codex 内置计划+目标；Pi 看扩展装没装
+    // 各工具内置/已装的「模式」：Claude、Codex、omp 内置计划+目标；Pi 看扩展装没装
     const caps = piExtensionState();
     const modesFor = (tid) => {
-      if (tid === 'claude' || tid === 'codex') return ['plan', 'goal'];
+      if (tid === 'claude' || tid === 'codex' || tid === 'omp') return ['plan', 'goal'];
       if (tid === 'pi') return [...(caps.plan ? ['plan'] : []), ...(caps.goal ? ['goal'] : [])];
       return [];
     };
@@ -1015,6 +1021,7 @@ if (req.method === 'GET' && resource === 'stream') {
         claude: `claude -p --permission-mode acceptEdits${sessionId ? ` --resume ${sessionId}` : ''}`,
         pi: `pi${sessionId ? ` --session ${sessionId}` : ''} -p`,
         codex: `codex exec --skip-git-repo-check -s workspace-write${sessionId ? ` resume ${sessionId}` : ''} -`,
+        omp: `omp -p${sessionId ? ` --resume ${sessionId}` : ''}`,
       }[node.tool];
       if (!baseCmd) return json(res, 400, { error: '该工具暂不支持无头发送' });
       const cmd = baseCmd + modelFlags(node.tool, node.model, node.modelProvider);

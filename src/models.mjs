@@ -61,6 +61,33 @@ export function listModels(tool) {
     return { options, configModel };
   }
 
+  if (tool === 'omp') {
+    // models.yml 只读我们关心的两层：providers.<name>.models[].{id,name}
+    const text = readText(path.join(HOME, '.omp', 'agent', 'models.yml'));
+    const options = [];
+    let provider = '';
+    for (const line of text.split('\n')) {
+      const p = line.match(/^\s{2}([\w.@-]+):\s*$/);
+      if (p) { provider = p[1]; continue; }
+      const id = line.match(/^\s*-\s*id:\s*(.+?)\s*$/);
+      if (id) { options.push({ id: id[1].replace(/^["']|["']$/g, ''), provider, label: '', note: provider }); continue; }
+      const nm = line.match(/^\s+name:\s*(.+?)\s*$/);
+      if (nm && options.length && !options[options.length - 1].label) {
+        options[options.length - 1].label = nm[1].replace(/^["']|["']$/g, '');
+      }
+    }
+    for (const o of options) if (!o.label) o.label = o.id;
+    // 默认角色（config.yml 的 modelRoles.default）优先，别把没配额的那个当默认
+    const conf = readText(path.join(HOME, '.omp', 'agent', 'config.yml'));
+    const hit = conf.match(/^\s*default:\s*(\S+)\s*$/m);
+    const configModel = hit ? hit[1] : (options[0] ? `${options[0].provider}/${options[0].id}` : '');
+    if (configModel) {
+      const full = options.find((o) => `${o.provider}/${o.id}` === configModel);
+      if (full) options.splice(options.indexOf(full), 1), options.unshift(full);
+    }
+    return { options, configModel };
+  }
+
   return { options: [], configModel: '' };
 }
 
@@ -76,6 +103,9 @@ export function detectSessionModel(node) {
     const fd = fs.openSync(file, 'r');
     try { fs.readSync(fd, buf, 0, len, Math.max(0, st.size - len)); } finally { fs.closeSync(fd); }
     const text = buf.toString('utf8');
+    // omp 的 model_change 里直接是 "provider/model" 字符串，优先取它
+    const change = [...text.matchAll(/"type"\s*:\s*"model_change"[\s\S]{0,300}?"model"\s*:\s*"([^"]+)"/g)].pop();
+    if (change) return change[1];
     const picks = [...text.matchAll(/"(?:model|modelId)"\s*:\s*"([^"]+)"/g)].map((m) => m[1]).filter(Boolean);
     if (!picks.length) return null;
     const last = picks[picks.length - 1];
@@ -94,5 +124,6 @@ export function modelFlags(tool, model, provider) {
   if (tool === 'claude') return ` --model ${q(m)}`;
   if (tool === 'codex') return ` --model ${q(m)}`;
   if (tool === 'pi') return provider ? ` --provider ${q(provider)} --model ${q(m)}` : ` --model ${q(m)}`;
+  if (tool === 'omp') return ` --model ${q(m)}`;
   return '';
 }
