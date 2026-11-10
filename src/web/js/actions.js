@@ -53,7 +53,6 @@ $('btn-discover').onclick = async () => {
     btn.textContent = orig;
   }
 };
-$('btn-launch').onclick = () => { if (currentTask) launchFlow(); };
 $('btn-attach').onclick = () => attachFlow();
 // 会话标签：激活 / 关闭
 $('sess-tabs').addEventListener('click', (e) => {
@@ -65,24 +64,6 @@ $('sess-tabs').addEventListener('click', (e) => {
   else openSessionTab(tab.dataset.tab);
 });
 $('btn-split').onclick = () => toggleSplit();
-/* 顶栏「更多」折叠菜单：只放新开会话、接入已有会话（其余常驻按钮不放这里） */
-(function bindMoreMenu() {
-  const wrap = $('more-wrap');
-  const menu = $('more-menu');
-  const btn = $('btn-more');
-  if (!wrap || !menu || !btn) return;
-  const setOpen = (open) => {
-    menu.hidden = !open;
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    btn.classList.toggle('active', open);
-  };
-  btn.setAttribute('aria-haspopup', 'menu');
-  btn.addEventListener('click', (e) => { e.stopPropagation(); setOpen(menu.hidden); });
-  // 选择菜单项后立即收起（各按钮自己的 onclick 照常执行）
-  menu.addEventListener('click', (e) => { if (e.target.closest('.more-item')) setOpen(false); });
-  document.addEventListener('click', (e) => { if (!e.target.closest('#more-wrap')) setOpen(false); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
-})();
 $('split-right').onchange = (e) => {
   if (!e.target.value) return;
   layout.mode = 'split';

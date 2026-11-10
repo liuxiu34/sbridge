@@ -75,71 +75,6 @@ function createTaskFlow(projectId = null) {
   setTimeout(() => $('f-title')?.focus(), 30);
 }
 
-function launchFlow() {
-  let tool = 'codex';
-  const taskId = currentTask.id;
-  const cwd = currentTask?.nodes?.find((n) => n.cwd)?.cwd || '';
-
-  openModal({
-    title: '新开会话',
-    bodyHtml: `
-      <div class="segmented" id="launch-switch">
-        ${toolButtonsHtml('codex')}
-      </div>
-      <div class="field"><label>工作目录</label><input id="f-launch-cwd" value="${escapeHtml(cwd)}" placeholder="例如 D:\\projects\\demo" autocomplete="off" /></div>
-      <div class="hint" id="launch-hint" style="color:#9a9aa4"></div>`,
-    submitLabel: '启动',
-    onSubmit: async () => {
-      const dir = $('f-launch-cwd').value.trim();
-      if (!dir) throw new Error('请填写工作目录');
-      const r = await api(`/api/tasks/${taskId}/launch`, { method: 'POST', body: { tool, cwd: dir, embed: true } });
-      await refreshTerms();
-      const runCwd = r.cwd || dir;
-      if (r.worktree?.path) {
-        toast(`${toolLabel(tool)} 已在独立 worktree 启动：${r.worktree.path}（分支 ${r.worktree.branch}）`);
-      } else {
-        toast(`${toolLabel(tool)} 已在内嵌终端启动${r.worktree?.reason ? `（${r.worktree.reason}）` : ''}，首轮对话后自动接入…`);
-      }
-      pollNewSession(taskId, r.since, tool, runCwd);
-    },
-  });
-
-  const hintEl = () => $('launch-hint');
-  const updateHint = () => {
-    if (hintEl()) hintEl().textContent = `会在 sbridge 内嵌终端里启动 ${toolLabel(tool)}（agent 挂在服务上，关页面不中断）；git 仓库且工作区干净时会自动建独立 worktree，多个 agent 并行互不覆盖；发出第一条消息后自动接入看板。`;
-  };
-  updateHint();
-  $('launch-switch').querySelectorAll('button').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      tool = btn.dataset.tool;
-      $('launch-switch').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
-      updateHint();
-    });
-  });
-  setTimeout(() => $('f-launch-cwd')?.focus(), 30);
-}
-
-async function pollNewSession(taskId, since, tool, cwd) {
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 3000));
-    try {
-      const data = await api(`/api/tasks/${taskId}/scan-new?tool=${tool}&since=${encodeURIComponent(since)}&cwd=${encodeURIComponent(cwd)}`);
-      if (data.node) {
-        if (currentTaskId === taskId) {
-          openSessionTab(data.node.id); // 就地打开会话标签，自动接上实时流
-        } else {
-          await loadState();
-        }
-        toast(`已自动接入 ${toolLabel(tool)} 会话`);
-        return;
-      }
-    } catch {
-      // 网络抖动或任务被删，下一轮重试
-    }
-  }
-  toast('3 分钟内未检测到新会话；开始对话后可用「接入已有会话」手动接入');
-}
-
 function attachFlow() {
   let tool = 'codex';
   let selected = null;
@@ -162,6 +97,10 @@ function attachFlow() {
         body: { tool, file: selected.file, allowCreateProject },
       });
       let r = await attach(false);
+      if (r.missingCwd) {
+        // 目录被删/移动：不建项目、不接入，直接把路径告诉用户
+        throw new Error(`会话目录不存在：${r.cwd}（可能已被删除或移动），未创建项目文件夹`);
+      }
       if (r.needsProject) {
         if (!confirm(`这个会话所在目录还没有项目文件夹：\n${r.cwd}\n\n要新建项目文件夹「${r.name}」并把它放进去吗？`)) {
           throw new Error('已取消，未创建项目文件夹');

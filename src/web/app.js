@@ -15,11 +15,9 @@ $('btn-theme')?.addEventListener('click', () => theme.toggle());
   decorate('btn-new-task', 'plus', '新建任务');
   // btn-new-project 已改为「项目文件夹」标题右侧的 ＋（renderTree 动态创建，纯文本）
   decorate('btn-search', 'search', '搜索');
-  decorate('btn-more', 'more', '');
   decorate('btn-panel', 'panel', '面板');
   decorate('btn-board-view2', 'board', '白板');
   decorate('btn-split', 'split', '分屏');
-  decorate('btn-launch', 'chat', '新开会话');
   decorate('btn-attach', 'link', '接入已有会话');
   const bb = $('btn-board-view');
   if (bb) bb.innerHTML = icon('board', 12) + ' 白板视图';
