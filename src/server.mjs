@@ -29,7 +29,7 @@ import { IS_SEA, ROOT, WEB_DIR, DATA_DIR } from './paths.mjs';
 
 let PORT = Number(process.argv.find((a) => a.startsWith('--port='))?.split('=')[1] || 4310);
 const TOOLS = { codex, pi, claude, omp };
-const TOOL_LABELS = { codex: 'Codex', pi: 'Pi', claude: 'Claude Code', omp: 'Oh My Pi' };
+const TOOL_LABELS = { codex: 'Codex', pi: 'Pi', claude: 'Claude Code', omp: 'OMP' };
 const LAUNCH_COMMANDS = { codex: 'codex', pi: 'pi', claude: 'claude', omp: 'omp' };
 // 目录比较用：大小写、斜杠、尾斜杠不敏感
 const normDir = (p) => String(p || '').replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();

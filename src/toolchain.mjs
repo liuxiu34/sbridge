@@ -10,7 +10,7 @@ export const CLI_PACKAGES = {
   codex: { pkg: '@openai/codex', cmd: 'codex', label: 'Codex' },
   pi: { pkg: '@earendil-works/pi-coding-agent', cmd: 'pi', label: 'Pi' },
   // omp 的 CLI 需要 Bun 运行时，装卸都走 bun
-  omp: { pkg: '@oh-my-pi/pi-coding-agent', cmd: 'omp', label: 'Oh My Pi', manager: 'bun' },
+  omp: { pkg: '@oh-my-pi/pi-coding-agent', cmd: 'omp', label: 'OMP', manager: 'bun' },
 };
 
 export const PI_EXTENSIONS = [

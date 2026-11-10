@@ -169,7 +169,7 @@ const clipText = (s, max) => {
   return t.length <= max ? t : t.slice(0, max - 1) + '…';
 };
 const toolLabel = (t) => state.tools?.find((x) => x.id === t)?.label || (t === 'codex' ? 'Codex' : t === 'pi' ? 'Pi' : t);
-const DEFAULT_TOOLS = [{ id: 'codex', label: 'Codex' }, { id: 'pi', label: 'Pi' }, { id: 'omp', label: 'Oh My Pi' }];
+const DEFAULT_TOOLS = [{ id: 'codex', label: 'Codex' }, { id: 'pi', label: 'Pi' }, { id: 'omp', label: 'OMP' }];
 const toolButtonsHtml = (activeId, exceptId = null) => (state.tools?.length ? state.tools : DEFAULT_TOOLS)
   .filter((t) => t.id !== exceptId)
   .map((t) => `<button data-tool="${t.id}" class="${t.id === activeId ? 'active' : ''}">${escapeHtml(t.label)}</button>`)
