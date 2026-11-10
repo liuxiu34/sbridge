@@ -169,7 +169,7 @@ const clipText = (s, max) => {
   return t.length <= max ? t : t.slice(0, max - 1) + '…';
 };
 const toolLabel = (t) => state.tools?.find((x) => x.id === t)?.label || (t === 'codex' ? 'Codex' : t === 'pi' ? 'Pi' : t);
-const DEFAULT_TOOLS = [{ id: 'codex', label: 'Codex' }, { id: 'pi', label: 'Pi' }];
+const DEFAULT_TOOLS = [{ id: 'codex', label: 'Codex' }, { id: 'pi', label: 'Pi' }, { id: 'omp', label: 'Oh My Pi' }];
 const toolButtonsHtml = (activeId, exceptId = null) => (state.tools?.length ? state.tools : DEFAULT_TOOLS)
   .filter((t) => t.id !== exceptId)
   .map((t) => `<button data-tool="${t.id}" class="${t.id === activeId ? 'active' : ''}">${escapeHtml(t.label)}</button>`)
@@ -334,6 +334,39 @@ const TOOL_COMMANDS = {
     ['logout', '退出登录'],
     ['quit', '退出 Codex'],
   ],
+  omp: [
+    // 来自 omp 的 src/slash-commands/builtin-*.ts
+    ['model', '选择模型（打开选择器）'],
+    ['plan', '计划模式：先出方案再动手'],
+    ['goal', '目标模式：设定目标，未达成不停止'],
+    ['todo', '查看/管理待办清单'],
+    ['context', '查看上下文占用'],
+    ['compact', '压缩对话上下文'],
+    ['new', '开新会话'],
+    ['resume', '恢复历史会话'],
+    ['tree', '会话树导航（切换分支）'],
+    ['fork', '从某条历史消息分支'],
+    ['branch', '在当前会话上开分支'],
+    ['copy', '复制上一条回复'],
+    ['export', '导出会话'],
+    ['thinking', '设置思考等级'],
+    ['effort', '调整推理力度'],
+    ['usage', '用量与额度'],
+    ['stats', '会话统计'],
+    ['memory', '查看/编辑记忆'],
+    ['skills', '技能管理'],
+    ['tools', '启用/禁用工具'],
+    ['agents', '子代理与多智能体'],
+    ['wt', 'Worktree 管理'],
+    ['commit', '生成提交信息'],
+    ['mcp', '管理 MCP 服务器'],
+    ['settings', '打开设置'],
+    ['config', '配置文件'],
+    ['reload', '重载配置/扩展'],
+    ['hotkeys', '查看快捷键'],
+    ['help', '帮助'],
+    ['quit', '退出 omp'],
+  ],
 };
 const toolCommands = (tool) => TOOL_COMMANDS[tool] || [];
 
@@ -350,6 +383,10 @@ const TOOL_MODES = {
   pi: [
     ['plan', '计划模式', '先列计划、确认后再动手'],
     ['goal', '目标模式', '设定目标，未达成前持续执行'],
+  ],
+  omp: [
+    ['plan', '计划模式', '原生 /plan：只读规划，确认后再改代码'],
+    ['goal', '目标模式', '原生 /goal：设定目标，未达成前持续执行'],
   ],
 };
 const toolModes = (tool) => {
