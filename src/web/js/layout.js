@@ -180,7 +180,7 @@ function renderPanes() {
   for (const id of visible) setTimeout(() => paneHandles.get(id)?.refit(), 60);
   area.querySelector('#ws-empty')?.remove();
   if (!openTabs.length && !area.querySelector('.workspace-empty')) {
-    area.insertAdjacentHTML('beforeend', `<div class="workspace-empty" id="ws-empty"><div class="empty-icon">⌨</div><h2>选择或新建一个会话</h2><p>点侧栏「会话链」里的卡片，或「新开会话 / 接入已有会话」。</p></div>`);
+    area.insertAdjacentHTML('beforeend', `<div class="workspace-empty" id="ws-empty"><div class="empty-icon">⌨</div><h2>选择或新建一个会话</h2><p>点侧栏「会话链」里的卡片，或顶栏「接入已有会话」。</p></div>`);
   } else {
     area.querySelector('#ws-empty')?.remove();
   }

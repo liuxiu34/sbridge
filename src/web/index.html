@@ -56,14 +56,8 @@
           <span>右侧</span>
           <select class="split-select" id="split-right" aria-label="右侧会话"></select>
         </span>
-        <!-- 其余常用度较低的操作用「更多」折叠，点开再选，避免顶栏铺满 -->
-        <span class="more-wrap" id="more-wrap">
-          <button class="btn-ghost" id="btn-more" aria-haspopup="menu" aria-expanded="false" title="更多操作">⋯</button>
-          <div class="more-menu" id="more-menu" role="menu" hidden>
-            <button class="more-item" id="btn-launch" role="menuitem">新开会话</button>
-            <button class="more-item" id="btn-attach" role="menuitem">接入已有会话</button>
-          </div>
-        </span>
+        <!-- 新开会话已去掉：左边「新建任务」就够；这里只留接入已有会话 -->
+        <button class="btn-ghost" id="btn-attach" title="把本机已有的 CLI 会话接进看板">↧ 接入已有会话</button>
       </div>
       <button class="btn-ghost" id="btn-panel" aria-pressed="false" title="面板（Ctrl+B）：改动 / 文件 / 上下文 / Worktree">⋯</button>
     </header>
@@ -87,7 +81,7 @@
         <div class="workspace-empty" id="ws-empty">
           <div class="empty-icon">⌨</div>
           <h2>选择或新建一个会话</h2>
-          <p>点侧栏「会话链」里的卡片，或「新开会话 / 接入已有会话」。<br />agent 面板会在这里打开：结构化动态 + 直接输入，关页面不中断。</p>
+          <p>点侧栏「会话链」里的卡片，或顶栏「接入已有会话」。</p>
         </div>
       </div>
       <!-- 右侧面板：内容跟随当前聚焦会话，和工作轨迹/终端切换互不影响 -->

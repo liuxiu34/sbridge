@@ -1164,13 +1164,18 @@ if (req.method === 'GET' && resource === 'stream') {
       /* 新会话落位：优先放进它自己目录所属的项目文件夹（「自动获取 · 目录名」，
          没有就现建），而不是塞到当前会话下面当子会话 */
       const nodeCwd = conv.cwd ? expandPath(conv.cwd) : '';
+      const cwdExists = !!nodeCwd && fs.existsSync(nodeCwd);
       const taskProject = db.projects.find((p) => p.id === task.projectId);
-      const belongsHere = !!nodeCwd && (
+      const belongsHere = cwdExists && (
         (task.nodes || []).some((n) => n.cwd && normDir(n.cwd) === normDir(nodeCwd))
         || (taskProject?.cwd && normDir(taskProject.cwd) === normDir(nodeCwd))
       );
       let target = belongsHere ? task : null;
       let createdProject = null;
+      if (!target && nodeCwd && !cwdExists) {
+        // 目录已被删除或移动：不建项目、不接入，前端提示「目录不存在」
+        return json(res, 200, { ok: false, missingCwd: true, cwd: nodeCwd });
+      }
       if (!target && nodeCwd) {
         const name = path.basename(nodeCwd) || nodeCwd;
         let project = db.projects.find((p) => p.cwd && normDir(p.cwd) === normDir(nodeCwd));
@@ -1190,7 +1195,11 @@ if (req.method === 'GET' && resource === 'stream') {
         target = db.tasks.find((t) => t.projectId === project.id && t.title === taskTitle)
           || store.createTask(db, { projectId: project.id, title: taskTitle });
       }
-      if (!target) target = task; // 读不出目录：只能留在当前任务
+      if (!target) {
+        // 读不出目录：作为一个独立任务（不挂任何项目文件夹），和「新建任务」选「独立任务」一致
+        const firstUser = conv.messages.find((m) => m.role === 'user')?.text || '(无目录会话)';
+        target = store.createTask(db, { projectId: null, title: truncate(String(firstUser), 60) });
+      }
       const node = store.addNode(db, target.id, makeNode(tool.name, conv));
       return json(res, 200, {
         ok: true,
