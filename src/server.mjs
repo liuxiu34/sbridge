@@ -19,10 +19,11 @@ import { applyBudget, summarize } from './model.mjs';
 import * as termmod from './term.mjs';
 import { renderTranscript } from './transcript.mjs';
 import { ensureSubagentProtocols } from './subagent-protocol.mjs';
-import { maybeCreateWorktree, isSbridgeWorktree, worktreeInfo, mergeWorktree } from './worktree.mjs';
+import { maybeCreateWorktree, isSbridgeWorktree, worktreeInfo, mergeWorktree, mainRepoOf, pruneStaleWorktrees } from './worktree.mjs';
 import { inspectChanges, listDir, readFilePreview } from './git-inspect.mjs';
-import { listModels, detectSessionModel, modelFlags } from './models.mjs';
+import { listModels, detectSessionModel, modelFlags, effortOptions, effortFlags, effortSlash } from './models.mjs';
 import { toolStatuses, updateTool, getAutoUpdate, setAutoUpdate, piExtensionState, installPiExtension, startAutoUpdate } from './toolchain.mjs';
+import { readApiConfig, writeApiConfig, SUPPORTED_TOOLS } from './api-config.mjs';
 import { scanProjectState, scanProjectTruth, renderProjectTruth } from './project-scan.mjs';
 import { expandPath, samePath, truncate, estimateTokens } from './util.mjs';
 import { IS_SEA, ROOT, WEB_DIR, DATA_DIR } from './paths.mjs';
@@ -346,6 +347,22 @@ async function handleApi(req, res, url) {
     return json(res, 200, {
       tools: Object.keys(TOOLS).map((tid) => ({ id: tid, label: TOOL_LABELS[tid] || tid, modes: modesFor(tid) })),
     });
+  }
+
+  /* API / provider 配置：只接管 Pi 和 OMP（Claude Code、Codex 用自带订阅登录，不碰） */
+  if (resource === 'api-config' && !id) {
+    if (req.method === 'GET') {
+      const tool = url.searchParams.get('tool') || 'pi';
+      if (!SUPPORTED_TOOLS.includes(tool)) return json(res, 400, { error: '该工具不支持 API 配置（只有 Pi 和 OMP）' });
+      try { return json(res, 200, readApiConfig(tool)); }
+      catch (err) { return json(res, 500, { error: err.message }); }
+    }
+    if (req.method === 'POST') {
+      const body = await readBody(req);
+      if (!SUPPORTED_TOOLS.includes(body.tool)) return json(res, 400, { error: '该工具不支持 API 配置（只有 Pi 和 OMP）' });
+      try { return json(res, 200, writeApiConfig(body.tool, body)); }
+      catch (err) { return json(res, 400, { error: err.message }); }
+    }
   }
 
   /* 编程工具安装/更新服务：版本对比、安装、自动保持最新、Pi 扩展 */
@@ -873,7 +890,7 @@ if (req.method === 'GET' && resource === 'stream') {
       let worktree = null;
       if (body.worktree !== false) {
         const wt = maybeCreateWorktree(targetCwd, `${to.name}-handoff`);
-        if (wt.created) { targetCwd = wt.cwd; worktree = { path: wt.cwd, branch: wt.branch, repo: wt.repo }; }
+        if (wt.created) { targetCwd = wt.cwd; worktree = { path: wt.cwd, branch: wt.branch, repo: wt.repo, bornFrom: wt.bornFrom }; }
         else worktree = { created: false, reason: wt.reason };
       }
 
@@ -953,7 +970,7 @@ if (req.method === 'GET' && resource === 'stream') {
       let worktree = null;
       if (body.worktree !== false) {
         const wt = maybeCreateWorktree(cwd, `${body.tool}-${(body.title || 'session')}`);
-        if (wt.created) { runCwd = wt.cwd; worktree = { path: wt.cwd, branch: wt.branch, repo: wt.repo }; }
+        if (wt.created) { runCwd = wt.cwd; worktree = { path: wt.cwd, branch: wt.branch, repo: wt.repo, bornFrom: wt.bornFrom }; }
         else worktree = { created: false, reason: wt.reason };
       }
       // 内嵌模式：agent 跑在 sbridge 窗口里的终端，不另开 PowerShell 窗口
@@ -1024,7 +1041,7 @@ if (req.method === 'GET' && resource === 'stream') {
         omp: `omp -p${sessionId ? ` --resume ${sessionId}` : ''}`,
       }[node.tool];
       if (!baseCmd) return json(res, 400, { error: '该工具暂不支持无头发送' });
-      const cmd = baseCmd + modelFlags(node.tool, node.model, node.modelProvider);
+      const cmd = baseCmd + modelFlags(node.tool, node.model, node.modelProvider) + effortFlags(node.tool, node.effort);
       headlessBusy.add(node.id);
       headlessStatus.set(node.id, { running: true, startedAt: Date.now(), tool: node.tool });
       let child;
@@ -1094,6 +1111,10 @@ if (req.method === 'GET' && resource === 'stream') {
         : null;
       if (modelNode?.model && !/--model\b/.test(command)) {
         command += modelFlags(body.tool, modelNode.model, modelNode.modelProvider);
+      }
+      // 思考深度也跟着会话走（Pi/OMP --thinking、Claude --effort、Codex -c model_reasoning_effort）
+      if (modelNode?.effort && !/--thinking|--effort\b|model_reasoning_effort/.test(command)) {
+        command += effortFlags(body.tool, modelNode.effort);
       }
       // Claude/Codex 的 resume 不回放历史（CLI 无行式模式），从会话文件生成显示层回放；
       // pi 自带 --tui-mode regular 回放，注入反而重复。
@@ -1169,8 +1190,11 @@ if (req.method === 'GET' && resource === 'stream') {
       }
 
       /* 新会话落位：优先放进它自己目录所属的项目文件夹（「自动获取 · 目录名」，
-         没有就现建），而不是塞到当前会话下面当子会话 */
-      const nodeCwd = conv.cwd ? expandPath(conv.cwd) : '';
+         没有就现建），而不是塞到当前会话下面当子会话。
+         sbridge worktree 里的会话归属它的主仓库目录（worktree 只是工作区，不是独立项目） */
+      let nodeCwd = conv.cwd ? expandPath(conv.cwd) : '';
+      const wtRepo = mainRepoOf(nodeCwd);
+      if (wtRepo) nodeCwd = wtRepo;
       const cwdExists = !!nodeCwd && fs.existsSync(nodeCwd);
       const taskProject = db.projects.find((p) => p.id === task.projectId);
       const belongsHere = cwdExists && (
@@ -1587,6 +1611,9 @@ if (req.method === 'GET' && resource === 'stream') {
         tool: node.tool, current, sync, detected: detected || null,
         stored: node.model || null, configModel: catalog.configModel || '',
         options: catalog.options || [],
+        // 思考深度：档位按工具 + 当前模型动态出（Codex/Pi 是逐模型的）
+        effort: effortOptions(node.tool, current, node.modelProvider),
+        effortCurrent: node.effort || '',
       });
     }
 
@@ -1601,6 +1628,11 @@ if (req.method === 'GET' && resource === 'stream') {
       if (!node) return json(res, 404, { error: '节点不存在' });
       node.model = model;
       node.modelProvider = body.provider ? String(body.provider) : null;
+      // 换了模型，原来那档思考深度可能这个模型不支持，顺手清掉
+      {
+        const eff = effortOptions(node.tool, model, node.modelProvider);
+        if (node.effort && (!eff.supported || !eff.levels.some((l) => l.id === node.effort))) node.effort = null;
+      }
       // 记住此刻会话文件里的模型：之后它变了，说明是在终端里改的
       node.modelSeen = detectSessionModel(node) || null;
       node.modelAt = new Date().toISOString();
@@ -1614,6 +1646,29 @@ if (req.method === 'GET' && resource === 'stream') {
         if (termmod.writeToNode(node.id, `/model ${termModel}`)) applied = 'term';
       }
       return json(res, 200, { ok: true, model, provider: node.modelProvider, applied, sync });
+    }
+
+    /* 切换思考深度：写入节点；终端在跑时 Pi/OMP/Claude 发斜杠命令立即生效，Codex 只能重开终端 */
+    if (req.method === 'POST' && sub === 'nodes' && subId && extra === 'effort') {
+      const body = await readBody(req);
+      const level = String(body.level || '').trim();
+      const fresh = store.load();
+      const node = fresh.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      const opts = effortOptions(node.tool, node.model, node.modelProvider);
+      if (level && (!opts.supported || !opts.levels.some((l) => l.id === level))) {
+        return json(res, 400, { error: `${TOOL_LABELS[node.tool] || node.tool} 当前模型不支持「${level}」这个思考深度` });
+      }
+      node.effort = level || null;
+      node.effortAt = new Date().toISOString();
+      store.save(fresh);
+      const sync = body.sync !== false;
+      let applied = 'saved';
+      if (sync && termmod.runningTermForNode(node.id)) {
+        const cmd = level ? effortSlash(node.tool, level) : '';
+        applied = cmd && termmod.writeToNode(node.id, cmd) ? 'term' : 'restart';
+      }
+      return json(res, 200, { ok: true, effort: node.effort, applied, sync });
     }
 
     /* 右侧面板：改动（git status / 单文件 diff），只读 */
@@ -1707,14 +1762,19 @@ if (req.method === 'GET' && resource === 'stream') {
       const task = db.tasks.find((t) => t.id === id);
       if (!task) return json(res, 404, { error: '任务不存在' });
       const seen = new Set();
+      const repos = new Set();
       const worktrees = [];
       for (const n of task.nodes) {
         const cwd = expandPath(n.cwd || '');
         if (!cwd || seen.has(cwd) || !isSbridgeWorktree(cwd)) continue;
         seen.add(cwd);
+        const repo = mainRepoOf(cwd);
+        if (repo) repos.add(repo);
         const info = worktreeInfo(cwd);
         if (info) worktrees.push({ nodeId: n.id, title: n.title, tool: n.tool, ...info });
       }
+      // 顺手清掉目录被手动删掉的幽灵 worktree（git 元数据残留会一直挂在 worktree list 上）
+      for (const repo of repos) pruneStaleWorktrees(repo);
       return json(res, 200, { worktrees });
     }
 
