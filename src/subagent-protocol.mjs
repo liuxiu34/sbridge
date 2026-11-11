@@ -8,7 +8,7 @@ import path from 'node:path';
    - Claude → ~/.claude/CLAUDE.md
    换机器装 sbridge 后，那台机器的三家工具自动获得「无头子代理修复」能力（任意指挥×任意 worker 排列组合）。 */
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 const TITLE = '# 子代理修复协议（Sub-agent Fix Protocol）';
 
@@ -70,7 +70,7 @@ type last-run-pi.log
 可用 worker（三选一；**每个 worker 用独立的日志文件名**，避免并发文件锁）：
 
 - Pi：\`pi -p < prompt.md > last-run-pi.log 2>&1\`
-- Claude Code：\`claude -p --permission-mode acceptEdits < prompt.md > last-run-claude.log 2>&1\`
+- Claude Code：\`claude -p --permission-mode acceptEdits --allowedTools "Bash" < prompt.md > last-run-claude.log 2>&1\`（--allowedTools 必须带：acceptEdits 只放行文件编辑，无头模式下 Bash 命令没人批准会挂起，子代理就只能改文件跑不了验证命令）
 - Codex：\`codex exec --skip-git-repo-check -s workspace-write - < prompt.md > last-run-codex.log 2>&1\`
 
 ## 4. 等待与判定（重要，避免误判）
