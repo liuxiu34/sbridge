@@ -1260,7 +1260,10 @@ if (req.method === 'GET' && resource === 'stream') {
           try { return { name, text: fs.readFileSync(f, 'utf8'), mtime: fs.statSync(f).mtimeMs }; } catch { return null; }
         };
         const prompt = pick('prompt.md');
-        const runner = pick('run-fix.cmd');
+        // 执行脚本按平台两种：Windows 的 run-fix.cmd / macOS·Linux 的 run-fix.sh。
+        // 两个都认，取较新的那个（用户换平台重跑时会留下另一份旧脚本）。
+        const runners = [pick('run-fix.cmd'), pick('run-fix.sh')].filter(Boolean).sort((a, b) => b.mtime - a.mtime);
+        const runner = runners[0] || null;
         let logs = [];
         try {
           logs = fs.readdirSync(fixDir).filter((f) => /\.log$/i.test(f)).map((f) => {
@@ -1277,6 +1280,7 @@ if (req.method === 'GET' && resource === 'stream') {
         fix = {
           exists: true,
           worker,
+          runner: runner?.name || null,
           prompt: truncate(prompt?.text || '', 1400),
           logs,
           startedAt: startMs ? new Date(startMs).toISOString() : null,

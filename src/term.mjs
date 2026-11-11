@@ -35,7 +35,9 @@ export function listTerms() {
     label: t.label,
     nodeId: t.nodeId || null,
     createdAt: t.createdAt,
-    running: !t.exitCode,
+    // 退出码 0 是「正常结束」，不是「还在跑」：用 null 判活（与 runningTermForNode/killTerm 同口径）。
+    // 写成 !t.exitCode 会让正常退出的终端永远显示运行中，前端据此把消息写进死 PTY。
+    running: t.exitCode === null,
     exitCode: t.exitCode,
   }));
 }

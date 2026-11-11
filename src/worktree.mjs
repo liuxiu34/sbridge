@@ -164,7 +164,10 @@ export function worktreeInfo(cwd) {
     if (a.ok) ahead = Number(a.out) || 0;
     const b = gitRun(['rev-list', '--count', `${branch}..${base}`], repo);
     if (b.ok) behind = Number(b.out) || 0;
-    merged = gitRun(['merge-base', '--is-ancestor', branch, base], repo).ok;
+    // 「已合并」= 分支没有领先提交，且工作区没有未提交改动。
+    // 只判 is-ancestor 会把「还没 commit 的改动」也算成已合并（分支正好等于 base 时恒真），
+    // 前端就会显示「已合并」，用户以为改动已经进主分支了。
+    merged = gitRun(['merge-base', '--is-ancestor', branch, base], repo).ok && statusLines.length === 0;
   }
   // 主仓库当前分支：给前端展示「合并目标 != 主仓库当前所在」的提示用
   let repoHead = '';

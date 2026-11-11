@@ -6,13 +6,45 @@ import path from 'node:path';
    - Codex → ~/.codex/AGENTS.md
    - Pi    → ~/.pi/AGENTS.md（pi 的项目级说明同为 AGENTS.md，与 Codex 共用）
    - Claude → ~/.claude/CLAUDE.md
-   换机器装 sbridge 后，那台机器的三家工具自动获得「无头子代理修复」能力（任意指挥×任意 worker 排列组合）。 */
+   换机器装 sbridge 后，那台机器的三家工具自动获得「无头子代理修复」能力（任意指挥×任意 worker 排列组合）。
 
-export const PROTOCOL_VERSION = 4;
+   v5：执行脚本/进程检查按平台生成——Windows 用 run-fix.cmd + cmd /c，macOS/Linux 用 run-fix.sh + bash。
+   模板里的 prompt/日志路径统一带 .sbridge-fix/ 前缀（此前 cmd 模板 cd 到项目目录后却读 prompt.md，路径对不上）。 */
+
+export const PROTOCOL_VERSION = 5;
 
 const TITLE = '# 子代理修复协议（Sub-agent Fix Protocol）';
 
-export const PROTOCOL_MD = `${TITLE}
+/** 执行脚本那一段：.cmd 与 .sh 两种口径，其余内容一致 */
+function runScriptSection(platform) {
+  if (platform === 'win32') {
+    return `创建 \`.sbridge-fix/run-fix.cmd\`，然后执行 \`cmd /c .sbridge-fix\\run-fix.cmd\`（用 cmd 包裹：PowerShell 不支持 \`<\` 重定向）。模板：
+
+\`\`\`cmd
+@echo off
+cd /d "<项目目录绝对路径>"
+pi -p < .sbridge-fix\\prompt.md > .sbridge-fix\\last-run-pi.log 2>&1
+type .sbridge-fix\\last-run-pi.log
+\`\`\``;
+  }
+  return `创建 \`.sbridge-fix/run-fix.sh\`，然后执行 \`bash .sbridge-fix/run-fix.sh\`（不要用 sh：模板里的重定向与引号按 bash 写）。模板：
+
+\`\`\`bash
+#!/usr/bin/env bash
+cd "<项目目录绝对路径>"
+pi -p < .sbridge-fix/prompt.md > .sbridge-fix/last-run-pi.log 2>&1
+cat .sbridge-fix/last-run-pi.log
+\`\`\``;
+}
+
+/** 生成协议正文；platform 默认当前机器（装到谁家说明里就按谁的平台写） */
+export function protocolMd(platform = process.platform) {
+  const win = platform === 'win32';
+  const processCheck = win
+    ? '\`Get-Process pi,claude,codex,node -ErrorAction SilentlyContinue\`（PowerShell）'
+    : '\`pgrep -af "pi|claude|codex"\`（或 \`ps aux | grep -E "pi|claude|codex"\`）';
+  const runnerName = win ? 'run-fix.cmd' : 'run-fix.sh';
+  return `${TITLE}
 
 ## 0. 什么时候走这个协议（触发方式）
 
@@ -58,26 +90,21 @@ export const PROTOCOL_MD = `${TITLE}
 
 ## 3. 写执行脚本并运行
 
-创建 \`.sbridge-fix/run-fix.cmd\`，然后执行 \`cmd /c .sbridge-fix\\run-fix.cmd\`（用 cmd 包裹：PowerShell 不支持 \`<\` 重定向）。模板：
-
-\`\`\`cmd
-@echo off
-cd /d "<项目目录绝对路径>"
-pi -p < prompt.md > last-run-pi.log 2>&1
-type last-run-pi.log
-\`\`\`
+${runScriptSection(platform)}
 
 可用 worker（三选一；**每个 worker 用独立的日志文件名**，避免并发文件锁）：
 
-- Pi：\`pi -p < prompt.md > last-run-pi.log 2>&1\`
-- Claude Code：\`claude -p --permission-mode acceptEdits --allowedTools "Bash" < prompt.md > last-run-claude.log 2>&1\`（--allowedTools 必须带：acceptEdits 只放行文件编辑，无头模式下 Bash 命令没人批准会挂起，子代理就只能改文件跑不了验证命令）
-- Codex：\`codex exec --skip-git-repo-check -s workspace-write - < prompt.md > last-run-codex.log 2>&1\`
+- Pi：\`pi -p < .sbridge-fix/prompt.md > .sbridge-fix/last-run-pi.log 2>&1\`
+- Claude Code：\`claude -p --permission-mode acceptEdits --allowedTools "Bash" < .sbridge-fix/prompt.md > .sbridge-fix/last-run-claude.log 2>&1\`（--allowedTools 必须带：acceptEdits 只放行文件编辑，无头模式下 Bash 命令没人批准会挂起，子代理就只能改文件跑不了验证命令）
+- Codex：\`codex exec --skip-git-repo-check -s workspace-write - < .sbridge-fix/prompt.md > .sbridge-fix/last-run-codex.log 2>&1\`
+
+本机执行脚本请用 \`${runnerName}\` 这个名字（sbridge 看板按它识别本轮用的是哪个 worker）；换平台时脚本后缀跟着换，命令体不变。
 
 ## 4. 等待与判定（重要，避免误判）
 
 - **前台等待脚本跑完**，不要放后台后过早检查。子代理通常 1-5 分钟。
 - 日志开头的框架启动警告（extension/plugin warning 等）不是结果，**以「修复报告」为准**。
-- 判定 worker 失败前，先确认 worker 进程已真正退出（\`Get-Process pi,claude,node\`），进程还在跑就继续等。
+- 判定 worker 失败前，先确认 worker 进程已真正退出（${processCheck}），进程还在跑就继续等。
 - 判定失败要换 worker 重试时：换一个**日志文件名**，并把上一轮的失败现象写进新 prompt（如 prompt-retry.md）。
 
 ## 5. 验证与收尾
@@ -91,12 +118,16 @@ type last-run-pi.log
 - 子代理拥有文件编辑权限（自动接受），只让它处理当前项目内的修复任务。
 - prompt 里不要包含密钥等敏感信息。
 - 保留 \`.sbridge-fix/\` 目录（修复审计记录），不要提交到 git。`;
+}
+
+/** 当前平台的协议正文（老调用方/测试直接用） */
+export const PROTOCOL_MD = protocolMd(process.platform);
 
 /** 通用幂等安装：工具目录存在才装（只改造这台机器上实际安装的工具）；
  *  已装（含标记）跳过；发现无标记/旧版本的块替换为当前版本；不存在则创建。 */
-function ensureProtocolFile(file, scope, { log = console.log } = {}) {
+function ensureProtocolFile(file, scope, { log = console.log, platform = process.platform } = {}) {
   const marker = `<!-- sbridge:subagent-protocol-${scope}:v${PROTOCOL_VERSION} -->`;
-  const block = `\n---\n\n${marker}\n\n${PROTOCOL_MD}\n`;
+  const block = `\n---\n\n${marker}\n\n${protocolMd(platform)}\n`;
   try {
     // 存在性检查：工具没装（家目录都没有）就不写文件
     if (!fs.existsSync(path.dirname(file))) {
@@ -105,6 +136,13 @@ function ensureProtocolFile(file, scope, { log = console.log } = {}) {
     }
     const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
     if (current.includes(marker)) return false; // 已是当前版本
+    // 同一个文件被多个工具共用（InstaBox 上 ~/.codex/AGENTS.md 与 ~/.claude/CLAUDE.md 都软链到 ~/AGENTS.md）：
+    // 内容已经是当前版本、只是 scope 标签不同，就别再重写——否则每次启动两个 scope 互相覆盖标记。
+    const anyScope = new RegExp(`<!-- sbridge:subagent-protocol-[\\w.-]+:v${PROTOCOL_VERSION} -->`);
+    if (anyScope.test(current)) {
+      log?.(`[子代理协议] ${file} 已由其他工具共用并装好 v${PROTOCOL_VERSION}，跳过重写`);
+      return false;
+    }
     let next;
     const titleAt = current.indexOf(TITLE);
     if (titleAt >= 0) {
@@ -118,7 +156,7 @@ function ensureProtocolFile(file, scope, { log = console.log } = {}) {
       }
       let end = current.indexOf('\n---\n', titleAt + TITLE.length);
       if (end === -1) end = current.length;
-      next = headLines.join('\n') + (headLines.length ? '\n' : '') + `${marker}\n\n` + PROTOCOL_MD + '\n' + current.slice(end);
+      next = headLines.join('\n') + (headLines.length ? '\n' : '') + `${marker}\n\n${protocolMd(platform)}\n` + current.slice(end);
     } else {
       next = current + (current && !current.endsWith('\n') ? '\n' : '') + block;
     }
