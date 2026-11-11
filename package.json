@@ -1,16 +1,16 @@
 {
   "name": "sbridge",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "会话接力工作台：在 Codex / Pi / Claude Code 之间搬运本地会话",
+  "description": "\u4f1a\u8bdd\u63a5\u529b\u5de5\u4f5c\u53f0\uff1a\u5728 Codex / Pi / Claude Code \u4e4b\u95f4\u642c\u8fd0\u672c\u5730\u4f1a\u8bdd",
   "license": "Apache-2.0",
   "homepage": "https://github.com/liuxiu34/sbridge",
   "scripts": {
     "app": "node src/server.mjs",
     "electron": "electron src/electron-main.cjs",
     "dist": "electron-builder --win nsis --publish never",
-    "build:exe": "esbuild src/server.mjs --bundle --platform=node --format=cjs --outfile=dist/app.cjs --log-level=error && node --experimental-sea-config sea-config.json && node -e \"const fs=require('fs'),path=require('path');fs.copyFileSync(path.join(path.dirname(process.execPath),'node.exe'),'dist/sbridge.exe');console.log('copied node.exe')\" && node -e \"const fs=require('fs');fs.rmSync('dist/node_modules',{recursive:true,force:true});fs.cpSync('node_modules/node-pty','dist/node_modules/node-pty',{recursive:true});fs.cpSync('node_modules/ws','dist/node_modules/ws',{recursive:true});console.log('copied pty deps(含 package.json)')\" && npx postject dist/sbridge.exe NODE_SEA_BLOB dist/sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
+    "build:exe": "esbuild src/server.mjs --bundle --platform=node --format=cjs --outfile=dist/app.cjs --log-level=error && node --experimental-sea-config sea-config.json && node -e \"const fs=require('fs'),path=require('path');fs.copyFileSync(path.join(path.dirname(process.execPath),'node.exe'),'dist/sbridge.exe');console.log('copied node.exe')\" && node -e \"const fs=require('fs');fs.rmSync('dist/node_modules',{recursive:true,force:true});fs.cpSync('node_modules/node-pty','dist/node_modules/node-pty',{recursive:true});fs.cpSync('node_modules/ws','dist/node_modules/ws',{recursive:true});console.log('copied pty deps(\u542b package.json)')\" && npx postject dist/sbridge.exe NODE_SEA_BLOB dist/sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
     "build:exe:linux": "esbuild src/server.mjs --bundle --platform=node --format=cjs --outfile=dist/app.cjs --log-level=error && node --experimental-sea-config sea-config.json && node -e \"const fs=require('fs');fs.copyFileSync(process.execPath,'dist/sbridge');fs.chmodSync('dist/sbridge',0o755);console.log('copied node')\" && node -e \"const fs=require('fs');fs.rmSync('dist/node_modules',{recursive:true,force:true});fs.cpSync('node_modules/node-pty','dist/node_modules/node-pty',{recursive:true});fs.cpSync('node_modules/ws','dist/node_modules/ws',{recursive:true});console.log('copied pty deps')\" && npx postject dist/sbridge NODE_SEA_BLOB dist/sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 && chmod +x dist/sbridge",
     "dist:linux": "electron-builder --linux AppImage deb --publish never"
   },
