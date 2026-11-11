@@ -148,38 +148,128 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         : `已切换模型：${shortModel(opt.id)}（下次终端/发送生效）`);
     } catch (err) { toast(err.message); }
   };
+  const effortLabel = (id) => (modelData.effort?.levels || []).find((l) => l.id === id)?.label || id;
+  const applyEffort = async (level, { keepOpen = false } = {}) => {
+    try {
+      const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/effort`, {
+        method: 'POST',
+        body: { level, sync: modelSync() },
+      });
+      modelData.effortCurrent = r.effort || '';
+      if (!keepOpen) closeModelPop();
+      const label = r.effort ? effortLabel(r.effort) : '默认';
+      if (r.applied === 'term') toast(`思考强度：${label}（终端已同步）`);
+      else if (r.applied === 'restart') toast(`思考强度：${label}（重开这个会话的终端后生效）`);
+      else toast(`思考强度：${label}（下次启动生效）`);
+    } catch (err) { toast(err.message); }
+  };
   const openModelPop = async () => {
     if (!modelBtn || !composerEl) return;
     if (modelPop) { closeModelPop(); return; }
     await loadModel();
+    const all = modelData.options || [];
+    const cur = modelData.current || '';
+    const curOpt = all.find((o) => o.id === cur) || null;
+    const providers = [...new Set(all.map((o) => o.provider).filter(Boolean))];
+    let provFilter = curOpt?.provider || '';
+    // 思考强度：档位逐模型算（Codex/Pi 每个模型不一样），用滑块调，松手才写
+    const eff = modelData.effort || { supported: false, levels: [] };
+    const levels = eff.levels || [];
+    const effCur = modelData.effortCurrent || '';
+    const curIdx = levels.findIndex((l) => l.id === effCur);
+    const defIdx = levels.findIndex((l) => l.id === eff.defaultLevel);
+    const effIdx = curIdx >= 0 ? curIdx : (defIdx >= 0 ? defIdx : Math.max(0, Math.floor((levels.length - 1) / 2)));
+    const effText = !levels.length ? ''
+      : curIdx >= 0 ? levels[curIdx].label
+        : defIdx >= 0 ? `${levels[defIdx].label}（默认）` : '默认';
     modelPop = document.createElement('div');
     modelPop.className = 'model-pop';
     modelPop.innerHTML = `
-      <input class="model-search" data-role="modelsearch" placeholder="搜索模型…" autocomplete="off" />
+      <div class="mp-head">
+        <span class="mp-cube">${icon('cube', 15)}</span>
+        <select class="mp-prov" data-role="prov">
+          ${providers.length ? '<option value="">全部模型</option>' : ''}
+          ${providers.map((p) => `<option value="${escapeHtml(p)}"${p === provFilter ? ' selected' : ''}>${escapeHtml(p)}</option>`).join('')}
+        </select>
+        <span class="mp-badge" data-role="badge">${all.length}</span>
+      </div>
+      <div class="mp-sub">
+        <span>模型</span>
+        <input class="model-search" data-role="modelsearch" placeholder="搜索…" autocomplete="off" />
+      </div>
       <div class="model-list" data-role="modellist"></div>
+      <div class="mp-effort">
+        <div class="mp-effort-head">
+          <span>思考强度</span>
+          <span class="mp-effort-val" data-role="effval">${escapeHtml(levels.length ? effText : '当前模型不支持')}</span>
+          <span class="mp-kbd">Ctrl+T</span>
+        </div>
+        ${levels.length ? `
+        <div class="effort-slider" data-role="effslider">
+          <div class="effort-fill" data-role="efffill"></div>
+          <div class="effort-knob" data-role="effknob"></div>
+          <input type="range" class="effort-range" data-role="effrange" aria-label="思考强度"
+            min="0" max="${Math.max(0, levels.length - 1)}" step="1" value="${effIdx}" />
+        </div>` : ''}
+      </div>
       <div class="model-foot">${modelSync() ? '与终端同步：开' : '与终端同步：关（在设置里改）'}</div>`;
     composerEl.appendChild(modelPop);
     const listEl = modelPop.querySelector('[data-role="modellist"]');
     const input = modelPop.querySelector('[data-role="modelsearch"]');
+    const badge = modelPop.querySelector('[data-role="badge"]');
     const paint = (q) => {
       const kw = String(q || '').trim().toLowerCase();
-      const opts = (modelData.options || []).filter((o) => !kw
+      const list = all.filter((o) => (!provFilter || o.provider === provFilter) && (!kw
         || String(o.id).toLowerCase().includes(kw)
-        || String(o.label || '').toLowerCase().includes(kw));
-      listEl.innerHTML = opts.length ? opts.slice(0, 200).map((o, i) => `
-        <button type="button" class="model-item ${o.id === modelData.current ? 'active' : ''}" data-mi="${i}">
-          <span class="model-item-label">${escapeHtml(o.label || o.id)}</span>
-          <span class="model-item-note">${escapeHtml(o.note || '')}</span>
+        || String(o.label || '').toLowerCase().includes(kw)));
+      if (badge) badge.textContent = String(list.length);
+      listEl.innerHTML = list.length ? list.slice(0, 300).map((o, i) => `
+        <button type="button" class="model-item ${o.id === cur ? 'active' : ''}" data-mi="${i}" title="${escapeHtml(o.label || o.id)}">
+          <span class="model-item-label">${escapeHtml(o.id)}</span>
+          ${o.vision ? '<span class="model-tag">视觉</span>' : ''}
+          ${o.id === cur ? `<span class="model-check">${icon('check', 13)}</span>` : ''}
         </button>`).join('') : '<div class="model-empty">没有匹配的模型</div>';
       listEl.querySelectorAll('[data-mi]').forEach((b) => {
-        b.onclick = () => applyModel(opts[Number(b.dataset.mi)]);
+        b.onclick = () => applyModel(list[Number(b.dataset.mi)]);
       });
     };
     paint('');
+    modelPop.querySelector('[data-role="prov"]')?.addEventListener('change', (e) => {
+      provFilter = e.target.value;
+      paint(input.value);
+    });
     input.addEventListener('input', () => paint(input.value));
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.stopPropagation(); closeModelPop(); }
     });
+    const range = modelPop.querySelector('[data-role="effrange"]');
+    const valEl = modelPop.querySelector('[data-role="effval"]');
+    const knob = modelPop.querySelector('[data-role="effknob"]');
+    const fill = modelPop.querySelector('[data-role="efffill"]');
+    const slider = modelPop.querySelector('[data-role="effslider"]');
+    if (range) {
+      // 自己画滑块：灰轨道 + 绿色已选段 + 白色圆点（照 T3 的样式）
+      const syncKnob = () => {
+        if (!knob || !slider) return;
+        const max = Number(range.max) || 1;
+        const pct = Math.max(0, Math.min(100, (Number(range.value) / max) * 100));
+        const w = slider.clientWidth || 0;
+        const x = (pct / 100) * Math.max(0, w - 20) + 10;
+        knob.style.left = `${x}px`;
+        if (fill) fill.style.width = `${x}px`;
+      };
+      syncKnob();
+      range.addEventListener('input', () => {
+        const l = levels[Number(range.value)];
+        if (l && valEl) valEl.textContent = l.label;
+        syncKnob();
+      });
+      range.addEventListener('change', () => {
+        const l = levels[Number(range.value)];
+        if (l) applyEffort(l.id, { keepOpen: true });
+      });
+      range.addEventListener('click', (e) => e.stopPropagation());
+    }
     input.focus();
     // 点面板外收起
     setTimeout(() => {
@@ -821,4 +911,18 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     node,
   };
 }
+
+/* Ctrl+T：打开焦点面板的模型弹层（思考强度也在这个弹层里）。
+   终端里按 Ctrl+T 可能被 shell/TUI 用掉，这里不拦，留给终端。 */
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || (e.key || '').toLowerCase() !== 't') return;
+  if (e.target?.closest?.('.xterm, .term-view')) return;
+  if (document.querySelector('.modal-mask:not([hidden])')) return;
+  const btn = document.querySelector('.pane-host.focused [data-role="model"]')
+    || document.querySelector('[data-role="model"]');
+  if (!btn) return;
+  e.preventDefault();
+  btn.click();
+});
+
 

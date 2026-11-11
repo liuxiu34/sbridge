@@ -45,6 +45,11 @@ function openSettingsModal() {
         <button type="button" class="btn-ghost" id="set-toolchain">${icon('download')} 管理</button>
       </div>
       <div class="set-row">
+        <span class="set-text"><span class="pick-title">API 配置</span>
+        <span class="pick-sub">Pi / OMP 的 provider、Base URL、密钥和模型清单，可批量改。Claude Code、Codex 走各自订阅登录，这里不接管</span></span>
+        <button type="button" class="btn-ghost" id="set-api">${icon('settings')} 配置</button>
+      </div>
+      <div class="set-row">
         <span class="set-text"><span class="pick-title">环境诊断</span>
         <span class="pick-sub">检查 Codex / Pi / Claude Code 是否安装、会话目录与登录/密钥配置；只读检测，不改任何配置</span></span>
         <button type="button" class="btn-ghost" id="set-envcheck">${icon('radar')} 检查</button>
@@ -66,6 +71,15 @@ function openSettingsModal() {
   $('set-envcheck').onclick = () => { close(); openEnvCheckModal(); };
   $('set-toolchain').onclick = () => { close(); openToolchainModal(); };
   $('set-archive').onclick = () => { close(); openArchiveModal(); };
+  $('set-api').onclick = () => { close(); openApiConfigModal(); };
+  // 这些行右侧有按钮，整行都可点（开关行是 label，交给 input 自己处理）
+  document.querySelectorAll('#modal-body .set-row').forEach((row) => {
+    if (row.tagName === 'LABEL') return;
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      row.querySelector('button')?.click();
+    });
+  });
 }
 
 /* ---------- 赞助入口：填好链接后侧栏才会出现「♥ 支持」 ---------- */
@@ -485,6 +499,7 @@ const ICONS = {
   split: '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M12 4.5v15" opacity=".55"/><circle cx="12" cy="10" r=".8" fill="currentColor" stroke="none" opacity=".7"/><circle cx="12" cy="12" r=".8" fill="currentColor" stroke="none" opacity=".7"/><circle cx="12" cy="14" r=".8" fill="currentColor" stroke="none" opacity=".7"/>', // 分屏：双栏 + 分隔点
   plus: '<path d="M12 5v14M5 12h14"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  cube: '<path d="M12 2.8 20 7.2v9.6L12 21.2 4 16.8V7.2z"/><path d="M4 7.2l8 4.4 8-4.4"/><path d="M12 11.6v9.6"/>', // 模型/供应商
   play: '<path d="M7 5.5v13l11-6.5z"/>',                                            // 启动
   history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.4"/><path d="M3.5 3.5v4.9h4.9"/><path d="M12 7.5V12l3 2.5"/>', // 历史
   down: '<path d="M12 5v13M6.5 12.5 12 18l5.5-5.5"/>',                              // 回到底部

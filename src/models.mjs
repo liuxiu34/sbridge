@@ -35,7 +35,12 @@ export function listModels(tool) {
     const cache = readJson(path.join(HOME, '.codex', 'models_cache.json')) || {};
     const options = (cache.models || [])
       .filter((m) => m && m.slug && m.visibility !== 'hide')
-      .map((m) => ({ id: String(m.slug), label: String(m.display_name || m.slug), note: String(m.description || '') }));
+      .map((m) => ({
+        id: String(m.slug),
+        label: String(m.display_name || m.slug),
+        note: String(m.description || ''),
+        vision: (m.input_modalities || []).some((x) => String(x).toLowerCase().includes('image')),
+      }));
     if (configModel && !options.some((o) => o.id === configModel)) {
       options.unshift({ id: configModel, label: configModel, note: 'config.toml 默认' });
     }
@@ -52,6 +57,7 @@ export function listModels(tool) {
         options.push({
           id: String(m.id), provider, label: String(m.name || m.id), note: provider,
           contextWindow: m.contextWindow || null,
+          vision: Array.isArray(m.input) ? m.input.includes('image') : undefined,
         });
       }
     }
@@ -125,5 +131,117 @@ export function modelFlags(tool, model, provider) {
   if (tool === 'codex') return ` --model ${q(m)}`;
   if (tool === 'pi') return provider ? ` --provider ${q(provider)} --model ${q(m)}` : ` --model ${q(m)}`;
   if (tool === 'omp') return ` --model ${q(m)}`;
+  return '';
+}
+
+/* ---------------- 思考深度（reasoning effort） ----------------
+   四个工具都能设，但入口不一样：
+   - Claude Code：--effort / 运行中 /effort
+   - Codex     ：-c model_reasoning_effort=… / 没有斜杠命令，要重开终端
+   - Pi        ：--thinking / 运行中 /thinking
+   - OMP       ：--thinking= / 运行中 /effort
+   档位不是固定的：Codex 按模型（models_cache.json），Pi 按模型的 thinkingLevelMap，
+   OMP / Claude 用通用档位。 */
+
+const EFFORT_ORDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+export const EFFORT_LABELS = {
+  off: '关', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高', ultra: '极限', auto: '自动',
+};
+const PI_EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const OMP_EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto'];
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const CODEX_FALLBACK = ['low', 'medium', 'high', 'xhigh'];
+
+const stripQ = (s) => String(s || '').replace(/^["']|["']$/g, '');
+
+/** Pi 的模型条目（含 reasoning / thinkingLevelMap） */
+function findPiModel(model, provider) {
+  const j = readJson(path.join(HOME, '.pi', 'agent', 'models.json')) || {};
+  let found = null;
+  for (const [pname, v] of Object.entries(j.providers || {})) {
+    for (const m of (v.models || [])) {
+      if (!m || m.id !== model) continue;
+      if (provider && pname !== provider) { found = found || m; continue; }
+      return m;
+    }
+  }
+  return found;
+}
+
+/** OMP 的 models.yml 里这个模型有没有写 reasoning: false */
+function ompModelReasoning(model) {
+  const text = readText(path.join(HOME, '.omp', 'agent', 'models.yml'));
+  const blocks = text.split(/\n(?=\s*-\s*id:)/);
+  const b = blocks.find((x) => stripQ(x.match(/^\s*-\s*id:\s*(.+)$/m)?.[1]) === model);
+  if (!b) return true;
+  return !/^\s*reasoning:\s*false\s*$/m.test(b);
+}
+
+/**
+ * 某工具 + 某个模型支持哪些思考深度。
+ * @returns {{supported: boolean, defaultLevel: string, levels: {id: string, label: string}[]}}
+ */
+export function effortOptions(tool, model, provider) {
+  const mk = (levels, defaultLevel = '') => {
+    const ordered = [
+      ...EFFORT_ORDER.filter((id) => levels.includes(id)),
+      ...(levels.includes('auto') ? ['auto'] : []),
+    ];
+    return {
+      supported: ordered.length > 0,
+      defaultLevel,
+      levels: ordered.map((id) => ({ id, label: EFFORT_LABELS[id] || id })),
+    };
+  };
+
+  if (tool === 'claude') return mk(CLAUDE_EFFORTS);
+
+  if (tool === 'pi') {
+    const m = findPiModel(model, provider);
+    if (m && m.reasoning === false) return mk([]);
+    // 低/中/高恒给（网关普遍支持，用户也默认有「中」）；模型 thinkingLevelMap
+    // 里显式映射了的档位（off/minimal/xhigh/max…）再补进来。null = 目录里没映射，不硬塞。
+    const levels = new Set(['low', 'medium', 'high']);
+    if (m?.thinkingLevelMap && typeof m.thinkingLevelMap === 'object') {
+      for (const [k, v] of Object.entries(m.thinkingLevelMap)) {
+        if (v != null && PI_EFFORTS.includes(k)) levels.add(k);
+      }
+    }
+    return mk(PI_EFFORTS.filter((id) => levels.has(id)));
+  }
+
+  if (tool === 'omp') return ompModelReasoning(model) ? mk(OMP_EFFORTS) : mk([]);
+
+  if (tool === 'codex') {
+    const cfg = readText(path.join(HOME, '.codex', 'config.toml'));
+    const configModel = cfg.match(/^\s*model\s*=\s*"([^"]+)"/m)?.[1] || '';
+    const cache = readJson(path.join(HOME, '.codex', 'models_cache.json')) || {};
+    const list = cache.models || [];
+    const m = list.find((x) => x && x.slug === model) || list.find((x) => x && x.slug === configModel);
+    if (!m) return mk(CODEX_FALLBACK);
+    const levels = (m.supported_reasoning_levels || []).map((x) => String(x?.effort || '')).filter(Boolean);
+    return mk(levels.length ? levels : CODEX_FALLBACK, m.default_reasoning_level || '');
+  }
+
+  return mk([]);
+}
+
+/** 启动参数：把思考深度带给 CLI */
+export function effortFlags(tool, level) {
+  const l = String(level || '').trim();
+  if (!l) return '';
+  if (tool === 'claude') return ` --effort ${l}`;
+  if (tool === 'codex') return ` -c model_reasoning_effort="${l}"`;
+  if (tool === 'pi') return ` --thinking ${l}`;
+  if (tool === 'omp') return ` --thinking=${l}`;
+  return '';
+}
+
+/** 运行中的终端用什么斜杠命令切；Codex 没有斜杠命令，只能重开终端 */
+export function effortSlash(tool, level) {
+  const l = String(level || '').trim();
+  if (!l) return '';
+  if (tool === 'pi') return `/thinking ${l}`;
+  if (tool === 'omp' || tool === 'claude') return `/effort ${l}`;
   return '';
 }

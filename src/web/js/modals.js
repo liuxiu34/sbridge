@@ -545,6 +545,199 @@ function openEnvCheckModal() {
   return close;
 }
 
+/** 设置 → API 配置：Pi / OMP 的 provider、Base URL、密钥、模型清单（Claude Code / Codex 不接管） */
+function openApiConfigModal() {
+  let tool = 'pi';
+  let providers = [];
+  let defaultModel = '';
+  let apiOptions = ['anthropic-messages', 'openai-completions', 'openai-responses'];
+
+  const close = openModal({
+    title: 'API 配置',
+    bodyHtml: `
+      <div class="api-bar">
+        <div class="segmented" id="api-tool"></div>
+        <button type="button" class="btn-ghost" id="api-add-prov">+ 添加 Provider</button>
+      </div>
+      <div class="hint" id="api-hint" style="color:#9a9aa4;margin:8px 0 10px"></div>
+      <div id="api-body"><div class="empty-tree">读取中…</div></div>`,
+    submitLabel: '保存',
+    onSubmit: async () => {
+      collect();
+      const r = await api('/api/api-config', { method: 'POST', body: { tool, providers, defaultModel } });
+      toast(`${toolLabel(tool)} 已保存 ${r.providers} 个 provider`);
+      await loadState();
+    },
+  });
+
+  const collect = () => {
+    if (!$('api-body')) return;
+    providers.forEach((p, i) => {
+      const get = (id) => $(id);
+      if (get(`p${i}-name`)) p.name = get(`p${i}-name`).value.trim();
+      if (get(`p${i}-base`)) p.baseUrl = get(`p${i}-base`).value.trim();
+      if (get(`p${i}-api`)) p.api = get(`p${i}-api`).value;
+      if (get(`p${i}-key`)) p.apiKey = get(`p${i}-key`).value;
+      p.models.forEach((m, j) => {
+        if (get(`m${i}-${j}-id`)) m.id = get(`m${i}-${j}-id`).value.trim();
+        if (get(`m${i}-${j}-name`)) m.name = get(`m${i}-${j}-name`).value.trim();
+      });
+    });
+    if ($('api-default')) defaultModel = $('api-default').value;
+  };
+
+  const modelChoices = () => {
+    const out = [];
+    for (const p of providers) for (const m of p.models) {
+      if (m.id) out.push({ value: `${p.name}/${m.id}`, label: `${p.name} / ${m.name || m.id}` });
+    }
+    if (defaultModel && !out.some((o) => o.value === defaultModel)) out.unshift({ value: defaultModel, label: defaultModel });
+    return out;
+  };
+
+  const renderBody = () => {
+    const body = $('api-body');
+    if (!body) return;
+    const choices = modelChoices();
+    const countModels = (p) => p.models.filter((m) => m.id).length;
+    body.innerHTML = `
+      ${providers.map((p, i) => `
+      <div class="api-prov${p._open ? ' is-open' : ''}">
+        <div class="api-prov-head" data-toggle-prov="${i}">
+          <span class="api-caret">›</span>
+          <span class="api-prov-name" id="hp${i}">${escapeHtml(p.name || '(未命名)')}</span>
+          <span class="api-prov-meta">${escapeHtml(p.baseUrl || '未设置 Base URL')} · ${countModels(p)} 个模型</span>
+          <button type="button" class="btn-ghost" data-del-prov="${i}">删除</button>
+        </div>
+        <div class="api-prov-body">
+          <div class="api-grid">
+            <label class="full">Provider 名称<input id="p${i}-name" class="api-in" value="${escapeHtml(p.name)}" placeholder="如 magpie" /></label>
+            <label class="full">Base URL<input id="p${i}-base" class="api-in" value="${escapeHtml(p.baseUrl)}" placeholder="https://api.example.com" /></label>
+            <label>协议
+              <select id="p${i}-api" class="sb-select api-in">
+                ${apiOptions.map((o) => `<option value="${o}"${o === p.api ? ' selected' : ''}>${o}</option>`).join('')}
+                ${p.api && !apiOptions.includes(p.api) ? `<option value="${escapeHtml(p.api)}" selected>${escapeHtml(p.api)}</option>` : ''}
+              </select>
+            </label>
+            <label>API Key<input id="p${i}-key" class="api-in" type="password" value="${escapeHtml(p.apiKey || '')}" placeholder="留空 = 不设置密钥" /></label>
+          </div>
+          <div class="api-models">
+            <div class="api-models-head">
+              <span>模型（${countModels(p)}）</span>
+              <button type="button" class="btn-ghost" data-add-model="${i}">+ 添加模型</button>
+            </div>
+            <div class="api-models-list">
+              ${p.models.map((m, j) => `
+              <div class="api-model">
+                <input id="m${i}-${j}-id" class="api-in" value="${escapeHtml(m.id)}" placeholder="模型 id，如 gpt-5" />
+                <input id="m${i}-${j}-name" class="api-in" value="${escapeHtml(m.name || '')}" placeholder="显示名（可选）" />
+                <button type="button" class="btn-ghost" data-del-model="${i}:${j}">移除</button>
+              </div>`).join('')}
+            </div>
+          </div>
+        </div>
+      </div>`).join('')}
+      <div class="api-default-row">
+        <span>默认模型</span>
+        <select id="api-default" class="sb-select api-in">
+          <option value="">（不设置）</option>
+          ${choices.map((c) => `<option value="${escapeHtml(c.value)}"${c.value === defaultModel ? ' selected' : ''}>${escapeHtml(c.label)}</option>`).join('')}
+        </select>
+      </div>`;
+
+    // 收起/展开：只切 class，不重渲染，输入的焦点不丢
+    body.querySelectorAll('[data-toggle-prov]').forEach((h) => {
+      h.onclick = (e) => {
+        if (e.target.closest('button')) return;
+        collect();
+        const i = Number(h.dataset.toggleProv);
+        providers[i]._open = !providers[i]._open;
+        h.closest('.api-prov').classList.toggle('is-open', providers[i]._open);
+      };
+    });
+    // 改名字/地址时同步收起状态的标题
+    providers.forEach((p, i) => {
+      const nameEl = $(`p${i}-name`);
+      if (nameEl) nameEl.oninput = () => { const t = $(`hp${i}`); if (t) t.textContent = nameEl.value.trim() || '(未命名)'; };
+    });
+    body.querySelectorAll('[data-del-prov]').forEach((b) => {
+      b.onclick = () => { collect(); providers.splice(Number(b.dataset.delProv), 1); renderBody(); };
+    });
+    body.querySelectorAll('[data-add-model]').forEach((b) => {
+      b.onclick = () => {
+        collect();
+        const i = Number(b.dataset.addModel);
+        providers[i].models.push({ id: '', name: '' });
+        providers[i]._open = true;
+        renderBody();
+        // 新行滚到可视区
+        body.querySelector(`#m${i}-${providers[i].models.length - 1}-id`)?.scrollIntoView({ block: 'nearest' });
+      };
+    });
+    body.querySelectorAll('[data-del-model]').forEach((b) => {
+      b.onclick = () => {
+        collect();
+        const [i, j] = b.dataset.delModel.split(':').map(Number);
+        providers[i].models.splice(j, 1);
+        providers[i]._open = true;
+        renderBody();
+      };
+    });
+  };
+
+  // 「+ 添加 Provider」固定在顶部，只绑一次
+  $('api-add-prov').onclick = () => {
+    collect();
+    providers.push({ name: `provider${providers.length + 1}`, baseUrl: '', api: apiOptions[0], apiKey: '', models: [{ id: '', name: '' }], _open: true });
+    renderBody();
+  };
+
+  const renderToolSwitch = () => {
+    const el = $('api-tool');
+    if (!el) return;
+    el.innerHTML = ['pi', 'omp']
+      .map((id) => `<button type="button" data-api-tool="${id}" class="${id === tool ? 'active' : ''}">${escapeHtml(toolLabel(id))}</button>`)
+      .join('');
+    el.querySelectorAll('[data-api-tool]').forEach((b) => {
+      b.onclick = () => { collect(); tool = b.dataset.apiTool; load(); };
+    });
+  };
+
+  const load = async () => {
+    renderToolSwitch();
+    const body = $('api-body');
+    if (body) body.innerHTML = '<div class="empty-tree">读取中…</div>';
+    try {
+      const r = await api(`/api/api-config?tool=${tool}`);
+      providers = (r.providers || []).map((p) => ({ ...p, models: p.models?.length ? p.models : [{ id: '', name: '' }], _open: false }));
+      defaultModel = r.defaultModel || '';
+      apiOptions = r.apiOptions || apiOptions;
+    } catch (err) {
+      if (body) body.innerHTML = `<div class="empty-tree">读取失败：${escapeHtml(err.message)}</div>`;
+      return;
+    }
+    if ($('api-hint')) {
+      $('api-hint').innerHTML = `只接管 ${escapeHtml(toolLabel(tool))} 的模型接入配置；Claude Code / Codex 用它们自己的订阅登录，这里不动。`
+        + ` · <a href="#" id="api-copy" style="color:var(--accent)">从 ${tool === 'pi' ? 'OMP' : 'Pi'} 复制一份</a>`;
+      $('api-copy')?.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const other = tool === 'pi' ? 'omp' : 'pi';
+        try {
+          const r = await api(`/api/api-config?tool=${other}`);
+          providers = (r.providers || []).map((p) => ({ ...p, _open: false }));
+          defaultModel = r.defaultModel || '';
+          renderBody();
+          toast(`已载入 ${toolLabel(other)} 的配置，点保存才会写入 ${toolLabel(tool)}`);
+        } catch (err) { toast(err.message); }
+      });
+    }
+    renderBody();
+  };
+
+  load();
+  return close;
+}
+
 /** 设置 → 归档：列出全部已归档会话，可恢复到原任务（归档只隐藏，不删会话文件） */
 function openArchiveModal() {
   const close = openModal({
