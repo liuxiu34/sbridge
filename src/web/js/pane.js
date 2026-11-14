@@ -44,6 +44,9 @@ function openSubagentModal(parentNode, data) {
 }
 
 function createSessionPane(host, node, { active = true, caption } = {}) {
+  const taskId = currentTask.id;
+  let disposed = false;
+  let cleanupComposer = () => {};
   const lastTs = { v: null };
   host.innerHTML = `
     <div class="session-pane ${active ? 'active' : 'idle'}">
@@ -75,12 +78,17 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       </div>
       <div class="sev-scroll" data-role="streamscroll" hidden><div class="sev-list" data-role="list"></div></div>
       <button type="button" class="stream-bottom" data-role="streambottom" title="滚到最新工作轨迹" hidden>${icon('down')} 回到最新</button>
+      <div class="execution-owner" data-role="executionowner" hidden>
+        <span>此会话正在原始终端中运行</span>
+        <button type="button" data-role="claimbackground">停止终端并在此继续</button>
+      </div>
+      <div class="interaction-panel" data-role="interactions" hidden aria-live="polite"></div>
       <div class="dock-row" data-role="dockrow" hidden>
         <div class="queue-bar" data-role="queuebar" hidden></div>
         <div class="dock-actions" data-role="dockactions" hidden>
-          <button type="button" data-role="steersend" title="不中断当前任务，把输入框内容作为引导注入（模型在本轮工具结束后就能看到，仅 Pi/OMP）" hidden>⚡ 引导</button>
+          <button type="button" data-role="steersend" title="${node.tool === 'claude' ? '把输入框内容排入当前会话，完成本轮后处理' : '把输入框内容作为运行中引导；等待回答时排入下一轮'}" hidden>${node.tool === 'claude' ? '下一轮补充' : '⚡ 引导'}</button>
           <button type="button" data-role="interruptsend" title="中断当前执行，立刻发送输入框里的消息">中断并发送</button>
-          <button type="button" data-role="cancelrun" title="停止当前无头执行（待发队列保留，之后自动继续）">取消执行</button>
+          <button type="button" data-role="cancelrun" title="停止当前执行并暂停队列，待发消息保留">取消执行</button>
         </div>
       </div>
       <div class="sess-input" data-role="composer">
@@ -139,7 +147,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   const loadModel = async () => {
     if (!modelBtn) return;
     try {
-      const d = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/model?sync=${modelSync() ? 1 : 0}`);
+      const d = await api(`/api/tasks/${taskId}/nodes/${node.id}/model?sync=${modelSync() ? 1 : 0}`);
       modelData = d;
       setModelLabel(d.current);
     } catch { /* 读不到就保持原样 */ }
@@ -153,7 +161,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     if (!opt) return;
     closeModelPop();
     try {
-      const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/model`, {
+      const r = await api(`/api/tasks/${taskId}/nodes/${node.id}/model`, {
         method: 'POST',
         body: { model: opt.id, provider: opt.provider || null, sync: modelSync() },
       });
@@ -167,7 +175,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   const effortLabel = (id) => (modelData.effort?.levels || []).find((l) => l.id === id)?.label || id;
   const applyEffort = async (level, { keepOpen = false } = {}) => {
     try {
-      const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/effort`, {
+      const r = await api(`/api/tasks/${taskId}/nodes/${node.id}/effort`, {
         method: 'POST',
         body: { level, sync: modelSync() },
       });
@@ -393,7 +401,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   const renderSubagents = async () => {
     if (!subagentBarEl) return;
     try {
-      const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/subagents`);
+      const r = await api(`/api/tasks/${taskId}/nodes/${node.id}/subagents`);
       if (!r.fix?.exists) { subagentBarEl.hidden = true; return; }
       const n = r.sessions?.length || 0;
       const worker = r.fix.worker ? ` · worker: ${toolLabel(r.fix.worker)}` : '';
@@ -433,40 +441,46 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   let headlessPollTimer = 0;
   const isHeadlessRunning = () => headlessRunning;
   const headlessElapsed = () => (headlessStartedAt ? Date.now() - headlessStartedAt : 0);
-  /* 无头执行进度轮询：发完消息后每 2 秒查一次 headless-status。
-     成功 → 结束「正在执行」状态；失败 → 立刻把 stderr 尾部用 toast 提示
-     （模型失效/账号问题/代理问题都会在这里暴露，而不是静默等 30 秒）。 */
+  let pollVersion = 0;
+  let lastOutcomeId = null;
+  let executionSnapshot = null;
+  const interactionPanel = createInteractionPanel(host.querySelector('[data-role="interactions"]'), {
+    taskId, nodeId: node.id, onAnswered: () => startHeadlessStatusPoll(),
+  });
+  const renderInteractions = (requests) => interactionPanel.render(requests);
   const startHeadlessStatusPoll = () => {
     clearTimeout(headlessPollTimer);
+    const version = ++pollVersion;
     const tick = async () => {
-      if (!headlessRunning) return;
-      let r = null;
-      try { r = await api(`/api/tasks/${currentTask.id}/headless-status?nodeId=${node.id}`); } catch { headlessPollTimer = setTimeout(tick, 2000); return; }
-      renderQueue(r?.queue || []);
-      const st = r?.status;
-      if (st && !st.running) {
-        // 刚结束：把结局注入工作轨迹（折叠回合并显示 ✓/✗/已取消 行）
-        cot.setHeadlessOutcome({ exitCode: st.exitCode, canceled: !!st.canceled, timedOut: !!st.timedOut, stderrTail: st.stderrTail || '' });
-        if (st.canceled) toast('已取消执行');
-        else if (st.timedOut) toast('执行超时（10 分钟），已终止');
-        else if (st.exitCode !== 0 && st.stderrTail) {
-          toast('执行失败: ' + String(st.stderrTail).slice(-140));
+      if (disposed || version !== pollVersion) return;
+      try {
+        const r = await api(`/api/tasks/${taskId}/headless-status?nodeId=${node.id}`);
+        if (disposed || version !== pollVersion) return;
+        executionSnapshot = r;
+        if (r.session?.id) node.sessionId = r.session.id;
+        if (r.session?.file && r.session.file !== node.file) {
+          node.file = r.session.file;
+          firstBatch = true; gone = false;
+          cot.reset(); connectStream();
         }
-        if (!(r?.queue || []).length) {
-          headlessRunning = false;
-          updateDockRow();
-          cot.setConnected(true);
-          cot.refresh();
-          try { renderSubagents(); } catch { /* ignore */ }
-          return;
+        if (r.recoveryError && r.recoveryError !== lastRecoveryError) { lastRecoveryError = r.recoveryError; toast(r.recoveryError); }
+        headlessRunning = !!r.status?.running;
+        headlessStartedAt = Number(r.status?.startedAt) || Date.parse(r.status?.startedAt) || 0;
+        renderQueue(r.queue || []);
+        renderInteractions(r.interactions || []);
+        host.querySelector('[data-role="executionowner"]').hidden = !r.terminal;
+        if (r.outcome?.runId && r.outcome.runId !== lastOutcomeId) {
+          lastOutcomeId = r.outcome.runId;
+          // 只有没有新一轮时，才把结束状态应用到最后一轮展示。
+          if (!headlessRunning) cot.setHeadlessOutcome(r.outcome);
+          if (r.outcome.exitCode !== 0 && !r.outcome.canceled && r.outcome.stderrTail) toast('执行失败：' + r.outcome.stderrTail.slice(-180));
         }
-        // 队列还有消息：服务端稍候自动开始下一条，继续轮询
-        headlessPollTimer = setTimeout(tick, 2000);
-        return;
-      }
-      headlessPollTimer = setTimeout(tick, 2000);
+        updateDockRow();
+        cot.refresh();
+      } catch { /* 连接恢复后继续同步，保留当前界面与草稿。 */ }
+      if (!disposed && version === pollVersion) headlessPollTimer = setTimeout(tick, 1500);
     };
-    tick();
+    void tick();
   };
 
   /* ---------- 底部 dock：待发队列条 + 执行操作按钮 ---------- */
@@ -480,7 +494,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     dockRowEl.hidden = !(headlessRunning || lastQueue.length > 0);
     if (dockActionsEl) {
       dockActionsEl.hidden = !headlessRunning;
-      // 引导支持 pi（RPC steer）与 claude（stream-json 原生排队为下一轮）；omp 方言待适配,其余单发无注入点
+      // Pi 支持运行中引导；Claude 的补充内容经统一队列在下一轮发送。
       if (steersendBtn) steersendBtn.hidden = !(headlessRunning && (node.tool === 'pi' || node.tool === 'claude'));
     }
   };
@@ -495,58 +509,35 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       queueBarEl.innerHTML = `<span class="queue-label">⏳ ${lastQueue.length} 条待发</span>`
         + lastQueue.map((it) => `
           <span class="queue-chip" title="${escapeHtml(it.message)}"><span class="qt">${escapeHtml(truncate(it.message, 26))}</span><button type="button" class="x" data-unqueue="${escapeHtml(it.id)}" title="撤回这条消息">✕</button></span>`).join('')
-        + `<span class="queue-note">完成后自动依次发送</span>`;
+        + (executionSnapshot?.paused
+          ? '<button type="button" data-resume-queue>继续发送队列</button><span class="queue-note">已暂停，消息已保留</span>'
+          : '<span class="queue-note">完成后依次发送</span>');
     }
     updateDockRow();
   };
   queueBarEl?.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-resume-queue]')) {
+      try { await api(`/api/tasks/${taskId}/nodes/${node.id}/resume-queue`, { method: 'POST', body: {} }); startHeadlessStatusPoll(); }
+      catch (err) { toast(err.message); }
+      return;
+    }
     const btn = e.target.closest('[data-unqueue]');
     if (!btn) return;
     try {
-      await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/unqueue`, { method: 'POST', body: { itemId: btn.dataset.unqueue } });
+      await api(`/api/tasks/${taskId}/nodes/${node.id}/unqueue`, { method: 'POST', body: { itemId: btn.dataset.unqueue } });
       renderQueue(lastQueue.filter((it) => it.id !== btn.dataset.unqueue));
     } catch (err) { toast(err.message); }
   });
   host.querySelector('[data-role="cancelrun"]')?.addEventListener('click', () => cancelHeadless());
-  host.querySelector('[data-role="steersend"]')?.addEventListener('click', async () => {
-    const text = (inputTa?.value || '').trim();
-    if (!text) { toast('先在输入框里写好要引导的内容'); return; }
-    try {
-      await api(`/api/tasks/${currentTask.id}/send-headless`, { method: 'POST', body: { nodeId: node.id, message: text, mode: 'steer' } });
-      cot.addLocalUser(text);
-      if (inputTa) inputTa.value = '';
-      toast('已作为引导注入：模型不中断，本轮工具结束后就能看到');
-    } catch (err) { toast(err.message); }
+  let submitDraft = null; // 三个发送入口共用草稿、附件和提交锁。
+  host.querySelector('[data-role="steersend"]')?.addEventListener('click', () => submitDraft?.('steer'));
+  host.querySelector('[data-role="interruptsend"]')?.addEventListener('click', () => submitDraft?.('interrupt'));
+  host.querySelector('[data-role="claimbackground"]')?.addEventListener('click', async () => {
+    await refreshTerms();
+    await stopNodeTerm(node);
+    await refreshTerms();
+    startHeadlessStatusPoll();
   });
-  host.querySelector('[data-role="interruptsend"]')?.addEventListener('click', async () => {
-    const text = (inputTa?.value || '').trim();
-    if (!text) { toast('先在输入框里写好要发送的内容，再点「中断并发送」'); return; }
-    try {
-      await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/interrupt-send`, { method: 'POST', body: { nodeId: node.id, message: text } });
-      cot.addLocalUser(text);
-      if (inputTa) inputTa.value = '';
-      headlessRunning = true;
-      headlessStartedAt = Date.now();
-      startHeadlessStatusPoll();
-      toast('已中断当前执行，新消息已发送');
-    } catch (err) { toast(err.message); }
-  });
-  // 面板重开时接上既有状态：这个会话可能已经有正在跑的无头任务/待发队列
-  (async () => {
-    try {
-      const r = await api(`/api/tasks/${currentTask.id}/headless-status?nodeId=${node.id}`);
-      renderQueue(r?.queue || []);
-      if (r?.status?.running && !headlessRunning) {
-        headlessRunning = true;
-        headlessStartedAt = Date.parse(r.status.startedAt) || Date.now();
-        updateDockRow();
-        startHeadlessStatusPoll();
-        cot.refresh();
-      } else {
-        updateDockRow();
-      }
-    } catch { /* 服务暂时不可达，忽略 */ }
-  })();
   scrollEl.addEventListener('scroll', scheduleStreamUi, { passive: true });
 
   let inputTa = null; // 输入框引用（在下方 if (active) 里赋值；「编辑重发」等回调要用）
@@ -570,29 +561,20 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   });
   cot.showEmpty('正在载入工作轨迹…');
 
-  /* 统一发送通道：输入框与「一键自检」共用。
-     该会话终端正在跑 → 写 PTY；否则无头执行（回复由工作轨迹 SSE 呈现）。 */
-  const deliverMessage = async (text) => {
+  // 工作轨迹始终交给后台管理器；原始终端占用时明确提示，不暗中切换输入去向。
+  const deliverMessage = async (text, requestId) => {
     if (!text) return;
-    if (boundRunningTerm(node)) { await sendToAgent(node, text); return; }
-    const wasRunning = headlessRunning;
-    if (!wasRunning) { headlessRunning = true; headlessStartedAt = Date.now(); }
-    cot.addLocalUser(text);
-    try {
-      // 服务端忙时不再 409：直接进待发队列并立即 ACK，当前执行结束后自动依次发送
-      const r = await api(`/api/tasks/${currentTask.id}/send-headless`, { method: 'POST', body: { nodeId: node.id, message: text } });
-      if (r?.queued) toast(`已加入待发队列（第 ${r.queueLen} 条），当前任务完成后自动发送`);
-    } catch (err) {
-      if (!wasRunning) { headlessRunning = false; cot.refresh(); }
-      throw err;
-    }
+    const r = await api(`/api/tasks/${taskId}/send-headless`, { method: 'POST', body: { nodeId: node.id, message: text, requestId } });
+    if (r?.queued) toast('已加入待发队列');
+    else cot.addLocalUser(text);
     startHeadlessStatusPoll();
+    return r;
   };
 
   /** 取消正在跑的无头任务（服务端会杀掉整棵进程树） */
   const cancelHeadless = async () => {
     try {
-      await api(`/api/tasks/${currentTask.id}/cancel-headless`, { method: 'POST', body: { nodeId: node.id } });
+      await api(`/api/tasks/${taskId}/cancel-headless`, { method: 'POST', body: { nodeId: node.id } });
     } catch (err) { toast(err.message); }
   };
 
@@ -600,7 +582,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   async function buildSelfCheckMessage() {
     let proj = null;
     try {
-      proj = (await api(`/api/tasks/${currentTask.id}/project-state`)).project;
+      proj = (await api(`/api/tasks/${taskId}/project-state`)).project;
     } catch { /* 扫描失败也继续：让 agent 自己看目录 */ }
     const lines = ['【项目进度自检】只做检查，不要修改任何文件。'];
     if (proj) {
@@ -696,7 +678,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     clearTimeout(usageTimer);
     usageTimer = setTimeout(async () => {
       try {
-        const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/usage`);
+        const r = await api(`/api/tasks/${taskId}/nodes/${node.id}/usage`);
         const c = r.ctx;
         if (!c || !c.used) return;
         ctxTokens = c.used;
@@ -729,8 +711,14 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     touch(evt.ts);
   };
 
-  const es = new EventSource(`/api/stream?tool=${encodeURIComponent(node.tool)}&file=${encodeURIComponent(node.file)}&tail=300`);
+  let es = null, lastRecoveryError = null;
+  const connectStream = () => {
+  es?.close();
+  clearTimeout(handle._t);
+  if (!node.file) { cot.showEmpty('在下方输入框发送第一条消息，开始这个会话。'); return; }
+  const currentStream = es = new EventSource(`/api/stream?tool=${encodeURIComponent(node.tool)}&file=${encodeURIComponent(node.file)}&tail=300`);
   es.onmessage = (e) => {
+    if (disposed || es !== currentStream) return;
     let evt;
     try { evt = JSON.parse(e.data); } catch { return; }
     cot.setConnected(true);
@@ -750,17 +738,21 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   };
   // 无历史会话时不让「正在载入…」一直停留
   es.onopen = () => {
+    if (disposed || es !== currentStream) return;
     cot.setConnected(true);
     setTimeout(() => {
-      if (!firstBatch || !cot.isEmpty()) return;
+      if (disposed || es !== currentStream || !firstBatch || !cot.isEmpty()) return;
       cot.showEmpty('会话还没有可展示的工作轨迹；在下方输入框发第一条消息吧。');
       scheduleStreamUi();
     }, 1200);
   };
   es.onerror = () => {
+    if (disposed || es !== currentStream) return;
     statusEl.textContent = '流已断开';
     cot.setConnected(false);
   };
+  };
+  connectStream();
 
   // 状态条
   const statusTimer = setInterval(() => {
@@ -770,7 +762,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     if (cancelHeadlessBtn) cancelHeadlessBtn.hidden = !headlessRunning; // 无头执行中才显示「取消执行」
     if (headlessRunning) {
       const sec = Math.max(0, Math.round(headlessElapsed() / 1000));
-      statusEl.textContent = `● 正在执行 · ${sec}s`;
+      statusEl.textContent = executionSnapshot?.status?.phase === 'waiting-input' ? '● 等待你的回答' : `● 正在执行 · ${sec}s`;
       return;
     }
     if (!lastTs.v) { statusEl.textContent = running ? '● 运行中' : '待活动'; return; }
@@ -784,6 +776,13 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     const ta = host.querySelector('[data-role="input"]');
     const btn = host.querySelector('[data-role="send"]');
     inputTa = ta;
+    let composing = false;
+    let submitting = false;
+    let draftRevision = 0;
+    ta.addEventListener('compositionstart', () => { composing = true; });
+    ta.addEventListener('compositionend', () => { composing = false; });
+    ta.addEventListener('input', () => { draftRevision++; });
+    const isComposing = (e) => composing || e.isComposing || e.keyCode === 229;
 
     /* ---------- 附件 chips / @ 文件 / / 命令 / 权限档位 ---------- */
     const chipsEl = host.querySelector('[data-role="chips"]');
@@ -814,10 +813,14 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     fileMenu.hidden = true;
     sessInput.appendChild(fileMenu);
     let fileMenuTimer = null;
-    const closeFileMenu = () => { fileMenu.hidden = true; };
+    let fileMenuRequest = 0;
+    const closeFileMenu = () => { clearTimeout(fileMenuTimer); fileMenuRequest++; fileMenu.hidden = true; };
+    cleanupComposer = closeFileMenu;
     const openFileMenu = async (q) => {
+      const request = ++fileMenuRequest;
       try {
-        const r = await api(`/api/tasks/${currentTask.id}/files?cwd=${encodeURIComponent(node.cwd || '')}&q=${encodeURIComponent(q || '')}`);
+        const r = await api(`/api/tasks/${taskId}/files?cwd=${encodeURIComponent(node.cwd || '')}&q=${encodeURIComponent(q || '')}`);
+        if (request !== fileMenuRequest || !host.isConnected) return;
         const files = r.files || [];
         fileMenu.innerHTML = files.length
           ? files.slice(0, 12).map((f) => `<button type="button" class="slash-item" data-fref="${escapeHtml(f)}"><span class="slash-cmd">@${escapeHtml(f)}</span></button>`).join('')
@@ -840,7 +843,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         addChip(item.dataset.fref);
         // 把输入框里未完成的 @词删掉
         const pos = ta.selectionStart ?? ta.value.length;
-        const before = ta.value.slice(0, pos).replace(/(?:^|\s)@([^\s@]*)$/, (m0, pre) => (pre || '') );
+        const before = ta.value.slice(0, pos).replace(/(^|\s)@([^\s@]*)$/, '$1');
         ta.value = before + ta.value.slice(pos);
         closeFileMenu();
         ta.focus();
@@ -873,7 +876,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       const cur = node.perm || 'normal';
       const next = PERM_META[(PERM_META.findIndex((m) => m.id === cur) + 1) % PERM_META.length];
       try {
-        await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/perm`, { method: 'POST', body: { level: next.id } });
+        await api(`/api/tasks/${taskId}/nodes/${node.id}/perm`, { method: 'POST', body: { level: next.id } });
         node.perm = next.id === 'normal' ? null : next.id;
         applyPermUI(next.id);
         toast(`权限档位：${next.name}${next.id === 'ro' && (node.tool === 'pi' || node.tool === 'omp') ? '（注意：Pi/OMP 无头模式暂不支持只读）' : ''}`);
@@ -957,6 +960,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       if (e.key === 'Escape' && !fileMenu.hidden) { fileMenu.hidden = true; }
     });
     ta.addEventListener('keydown', (e) => {
+      if (isComposing(e)) return;
       if (!menu.hidden && menuItems.length) {
         if (e.key === 'ArrowDown') { e.preventDefault(); menuIdx = (menuIdx + 1) % menuItems.length; renderMenu(ta.value); const sel = menu.querySelector('.selected'); sel?.scrollIntoView({ block: 'nearest' }); return; }
         if (e.key === 'ArrowUp') { e.preventDefault(); menuIdx = (menuIdx - 1 + menuItems.length) % menuItems.length; renderMenu(ta.value); const sel = menu.querySelector('.selected'); sel?.scrollIntoView({ block: 'nearest' }); return; }
@@ -973,6 +977,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
             return;
           }
           e.preventDefault();
+          e.stopImmediatePropagation();
           ta.value = '/' + cmd + ' ';
           menu.hidden = true;
           return;
@@ -992,37 +997,55 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         setTimeout(() => ta.setSelectionRange(ta.value.length, ta.value.length), 0);
         return;
       }
-      if (e.key === 'Enter' && !e.shiftKey && ta.value.trim()) pushHistory(ta.value.trim());
     });
     let historyDraft = '';
-    const doSend = async () => {
+    const doSend = async (mode = 'send') => {
+      if (submitting || composing) return;
+      const original = ta.value;
+      const revision = draftRevision;
+      const sentChips = [...chips];
       const text = ta.value.trim();
+      const requestId = crypto.randomUUID();
       if (!text && !chips.length) return;
       menu.hidden = true;
       closeFileMenu();
+      submitting = true;
       btn.disabled = true;
       try {
-        const refs = chips.length ? chips.map((p) => `@${p}`).join(' ') + '\n' : '';
+        const refs = sentChips.length ? sentChips.map((p) => `@${p}`).join(' ') + '\n' : '';
         const full = (refs + text).trim();
-        if (!refs && text.startsWith('/')) {
+        if (mode === 'steer' || mode === 'interrupt') {
+          const route = mode === 'interrupt' ? `nodes/${node.id}/interrupt-send` : 'send-headless';
+          const r = await api(`/api/tasks/${taskId}/${route}`, { method: 'POST', body: { nodeId: node.id, message: full, mode, requestId } });
+          if (!r?.queued) cot.addLocalUser(full);
+          headlessRunning = true;
+          headlessStartedAt ||= Date.now();
+          startHeadlessStatusPoll();
+          toast(mode === 'interrupt' ? '已中断当前执行，新消息已提交' : (r?.queued ? '已排入当前会话，下一轮处理' : '已提交引导'));
+        } else if (!refs && text.startsWith('/')) {
           // 斜杠命令 = TUI 指令：确保终端运行并发送，切到终端视图交互
+          if (headlessRunning) throw new Error('当前任务仍在执行，请先完成或取消，再使用原始终端命令');
           await sendToAgent(node, text);
           applyStreamView(false);
           await ensureTerminal();
           slashSwitched = true;
         } else {
-          // 终端在跑就写 PTY，否则无头执行（忙时服务端自动排队）
-          await deliverMessage(full);
+          // 普通消息始终交给后台执行；忙时服务端排队，终端占用时提示用户。
+          await deliverMessage(full, requestId);
         }
-        ta.value = '';
-        chips = [];
+        pushHistory(text);
+        // 请求期间用户可能继续输入；只清除仍然是原样的那份草稿。
+        if (draftRevision === revision && ta.value === original) ta.value = '';
+        chips = chips.filter((p) => !sentChips.includes(p));
         renderChips();
       } catch (err) {
         toast(err.message);
-      } finally { btn.disabled = false; ta.focus(); }
+      } finally { submitting = false; btn.disabled = false; ta.focus(); }
     };
-    btn.onclick = doSend;
+    submitDraft = doSend;
+    btn.onclick = () => doSend();
     ta.onkeydown = (e) => {
+      if (e.defaultPrevented || isComposing(e)) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
     };
   }
@@ -1048,6 +1071,15 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     streamBtn.title = v ? '返回原始终端' : '查看 AI 工作轨迹（步骤、查询、结果与来源）';
     streamBtn.classList.toggle('active', v);
     streamBtn.setAttribute('aria-pressed', String(v));
+    if (!v && headlessRunning) {
+      showingStream = true;
+      termViewEl.hidden = true;
+      scrollEl.hidden = false;
+      streamBtn.innerHTML = icon('terminal') + ' 终端';
+      streamBtn.setAttribute('aria-pressed', 'true');
+      toast('当前任务仍在工作轨迹中执行，结束后可打开原始终端');
+      return;
+    }
     if (!v) {
       streamBottomBtn.hidden = true;
       rawTerm?.refit();
@@ -1142,9 +1174,16 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   });
   streamBottomBtn.addEventListener('click', () => { toBottom(); scheduleStreamUi(); });
 
+  startHeadlessStatusPoll();
   return {
     close() {
-      es.close();
+      disposed = true;
+      pollVersion++;
+      cleanupComposer();
+      interactionPanel.dispose();
+      closeModelPop();
+      if (nodeTuiHandlers.get(node.id) === tuiHooks.onTuiDialog) nodeTuiHandlers.delete(node.id);
+      es?.close();
       clearInterval(statusTimer);
       clearInterval(cotTimer);
       clearTimeout(handle._t);

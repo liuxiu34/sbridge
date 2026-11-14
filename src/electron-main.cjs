@@ -1,5 +1,5 @@
 const { app, BrowserWindow, Tray, Menu, shell, dialog, ipcMain } = require('electron');
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -92,6 +92,7 @@ function logLine(msg) {
 }
 
 function startService() {
+  if (quitting) return;
   if (!fs.existsSync(svcExe)) {
     dialog.showErrorBox('sbridge', `找不到服务程序：\n${svcExe}`);
     app.quit();
@@ -197,7 +198,7 @@ function createTray() {
       enabled: IS_WIN || process.platform === 'darwin',
       click: (item) => { app.setLoginItemSettings({ openAtLogin: item.checked, path: process.execPath }); } },
     { type: 'separator' },
-    { label: '退出 sbridge', click: () => { quitting = true; app.quit(); } },
+    { label: '退出 sbridge', click: () => app.quit() },
   ]);
   tray.setToolTip('sbridge · 会话接力工作台');
   tray.setContextMenu(menu);
@@ -248,7 +249,21 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => { /* 托盘常驻：不退出 */ });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (quitting) { event.preventDefault(); return; }
   quitting = true;
-  if (svc) { try { svc.kill(); } catch { /* ignore */ } }
+  if (!svc) return;
+  event.preventDefault();
+  const service = svc;
+  // 正常退出先停止后台回合并保存队列；只杀服务壳会遗留 CLI 子进程。
+  fetch(`http://127.0.0.1:${svcPort}/api/shutdown`, { method: 'POST', signal: AbortSignal.timeout(12_000) })
+    .catch((error) => logLine(`停止后台任务：${error.message}`))
+    .finally(() => {
+      if (IS_WIN && service.pid) {
+        execFile('taskkill', ['/PID', String(service.pid), '/T', '/F'], { windowsHide: true }, () => app.exit(0));
+      } else {
+        try { service.kill(); } catch { /* 已退出 */ }
+        app.exit(0);
+      }
+    });
 });
