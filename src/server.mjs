@@ -1102,8 +1102,75 @@ if (req.method === 'GET' && resource === 'stream') {
     }
     const launchRun = (taskId, node, message) => {
       if (rpcBin(node.tool)) return rpcLaunch(taskId, node, message);
+      if (node.tool === 'claude') return claudeLaunch(taskId, node, message);
       startHeadlessRun(taskId, node, message);
     };
+    // ---------- claude 长驻驱动(--input-format stream-json 双向):运行中注入的消息由 claude 原生排为下一轮 ----------
+    const claudeDrivers = globalThis.__sbClaudeDrivers || (globalThis.__sbClaudeDrivers = new Map());
+    function claudeSend(driver, message) {
+      try { driver.proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: message }] } }) + '\n'); } catch { /* 进程已死 */ }
+    }
+    function claudeSettle(node, driver, extra = {}) {
+      clearTimeout(driver.watchdog);
+      if (claudeDrivers.get(node.id) !== driver) return; // 已被中断重启的新驱动替换,不要碰新一轮的 busy
+      headlessBusy.delete(node.id);
+      headlessChildren.delete(node.id);
+      const prev = headlessStatus.get(node.id);
+      if (!prev || prev.running) headlessStatus.set(node.id, { running: false, exitCode: extra.exitCode ?? 0, stderrTail: extra.stderrTail || '', endedAt: Date.now(), tool: node.tool, ...extra });
+      const q = queueOf(node.id);
+      if (q.length) setTimeout(() => drainHeadless(extra.taskId, node), 600);
+    }
+    function getClaudeDriver(node, cwd, taskId) {
+      const existing = claudeDrivers.get(node.id);
+      if (existing && existing.proc && existing.proc.exitCode == null && existing.cwd === cwd && !existing.closing) return existing;
+      if (existing) { existing.closing = true; try { existing.proc.kill(); } catch { /* 已退出 */ } claudeDrivers.delete(node.id); }
+      const tool = TOOLS[node.tool];
+      let sessionId = node.sessionId || null;
+      if (!sessionId && node.file && !node.file.startsWith('sqlite:')) {
+        try { sessionId = tool.read(node.file).id; } catch { /* 开新会话 */ }
+      }
+      const level = permLevel(node);
+      const perm = level === 'yolo' ? '--dangerously-skip-permissions'
+        : level === 'ro' ? '--permission-mode acceptEdits --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash,Task"'
+        : '--permission-mode acceptEdits';
+      const cmd = `claude -p ${perm} --input-format stream-json --output-format stream-json --verbose${sessionId ? ` --resume ${sessionId}` : ''}${modelFlags(node.tool, node.model, node.modelProvider)}`;
+      const proc = spawn(cmd, { cwd, env: HEADLESS_ENV, windowsHide: true, shell: true });
+      const driver = { node: { ...node }, proc, cwd, taskId, buf: '', watchdog: null, closing: false };
+      proc.stdout?.on('data', (d) => {
+        driver.buf += d.toString('utf8');
+        let i;
+        while ((i = driver.buf.indexOf('\n')) >= 0) {
+          const line = driver.buf.slice(0, i); driver.buf = driver.buf.slice(i + 1);
+          if (!line.trim()) continue;
+          let rec; try { rec = JSON.parse(line); } catch { continue; }
+          if (rec.type === 'result') {
+            claudeSettle(node, driver, rec.is_error ? { exitCode: 1, stderrTail: String(rec.result || '').slice(0, 160) } : {});
+          }
+        }
+      });
+      proc.on('exit', () => {
+        if (claudeDrivers.get(node.id) === driver) claudeDrivers.delete(node.id);
+        if (headlessBusy.has(node.id)) claudeSettle(node, driver, { exitCode: driver.closing ? -2 : -1, canceled: driver.closing, stderrTail: driver.closing ? '已中断' : 'claude 进程退出' });
+      });
+      claudeDrivers.set(node.id, driver);
+      return driver;
+    }
+    function claudeLaunch(taskId, node, message, { steer = false } = {}) {
+      const cwd = expandPath(node.cwd || '');
+      const driver = getClaudeDriver(node, cwd, taskId);
+      if (headlessBusy.has(node.id)) {
+        // 忙:claude 对运行中写入的消息自动排为下一轮(同会话不中断) —— 等价引导语义
+        if (steer) { claudeSend(driver, message); return { steered: true }; }
+        return { queued: true };
+      }
+      headlessBusy.add(node.id);
+      headlessStatus.set(node.id, { running: true, startedAt: Date.now(), tool: node.tool });
+      clearTimeout(driver.watchdog);
+      driver.watchdog = setTimeout(() => { driver.closing = true; try { driver.proc.kill(); } catch { /* 已退出 */ } }, HEADLESS_TIMEOUT_MS);
+      driver.watchdog.unref?.();
+      claudeSend(driver, message);
+      return {};
+    }
     const drainHeadless = (taskId, node) => {
       const q = queueOf(node.id);
       if (headlessBusy.has(node.id) || !q.length) return;
@@ -1185,6 +1252,10 @@ if (req.method === 'GET' && resource === 'stream') {
         const driver = rpcDrivers.get(nid);
         if (driver) { rpcSend(driver, { type: 'abort' }); return json(res, 200, { ok: true, aborted: 'rpc' }); }
       }
+      if (cnode && cnode.tool === 'claude') {
+        const driver = claudeDrivers.get(nid);
+        if (driver && headlessBusy.has(nid)) { driver.closing = true; try { driver.proc.kill(); } catch { /* 已退出 */ } return json(res, 200, { ok: true, aborted: 'claude' }); }
+      }
       const child = headlessChildren.get(nid);
       headlessStatus.set(nid, { running: false, exitCode: -2, canceled: true, stderrTail: '已取消', endedAt: Date.now(), tool: headlessStatus.get(nid)?.tool });
       headlessBusy.delete(nid);
@@ -1208,9 +1279,9 @@ if (req.method === 'GET' && resource === 'stream') {
         return json(res, 400, { error: 'Pi/OMP 的无头模式没有「只读」档，请把权限切回「常规」再发送' });
       }
       if (headlessBusy.has(node.id)) {
-        // 忙:引导(pi/omp RPC steer)或进队(其余工具/pi 的排队)
-        if (rpcBin(node.tool) && body.mode === 'steer') {
-          const r = rpcLaunch(id, node, message, { steer: true });
+        // 忙:引导(pi RPC steer / claude stream-json 原生排队为下一轮)或进队
+        if (body.mode === 'steer' && (rpcBin(node.tool) || node.tool === 'claude')) {
+          const r = rpcBin(node.tool) ? rpcLaunch(id, node, message, { steer: true }) : claudeLaunch(id, node, message, { steer: true });
           if (r.error) return json(res, 400, { error: r.error });
           return json(res, 200, { ok: true, steered: true });
         }
@@ -1237,6 +1308,16 @@ if (req.method === 'GET' && resource === 'stream') {
       const task = db.tasks.find((t) => t.id === id);
       const node = task?.nodes.find((n) => n.id === subId);
       if (!node) return json(res, 404, { error: '节点不存在' });
+      if (node.tool === 'claude') {
+        const wasBusy = headlessBusy.has(node.id);
+        if (wasBusy) {
+          const d0 = claudeDrivers.get(node.id);
+          if (d0) { d0.closing = true; try { d0.proc.kill(); } catch { /* 已退出 */ } }
+        }
+        const r = claudeLaunch(id, node, message);
+        if (r.error) return json(res, 400, { error: r.error });
+        return json(res, 200, { ok: true, interrupted: wasBusy });
+      }
       if (rpcBin(node.tool)) {
         const driver = rpcDrivers.get(node.id);
         const wasBusy = headlessBusy.has(node.id);
