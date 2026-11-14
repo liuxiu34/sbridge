@@ -45,6 +45,107 @@ function createProjectFlow() {
   setTimeout(() => $('f-name')?.focus(), 30);
 }
 
+/* ---------------- 新开会话（空任务发起第一场对话） ----------------
+   服务端 /launch 内嵌起全新 CLI 会话；会话文件落盘后（pi/codex 启动即建，
+   claude 要等第一条消息）轮询到它，用 POST nodes 挂进当前任务并打开面板。 */
+function newSessionFlow(defaultCwd = '') {
+  let tool = 'codex';
+  const close = openModal({
+    title: '新开会话',
+    bodyHtml: `
+      <div class="segmented" id="ns-tool">${toolButtonsHtml(tool)}</div>
+      <div class="field"><label>工作目录</label>
+        <div class="dir-pick">
+          <input id="ns-cwd" placeholder="选择或输入项目目录，例如：D:\code\my-app" value="${escapeHtml(defaultCwd)}" autocomplete="off" />
+          <button type="button" class="btn-ghost" id="ns-browse" title="打开系统目录选择框">浏览…</button>
+        </div>
+      </div>
+      <label class="hint" style="display:flex;align-items:center;gap:6px;margin-top:6px;color:#9a9aa4;cursor:pointer">
+        <input type="checkbox" id="ns-worktree" checked /> 在 git worktree 里隔离（干净仓库才生效，否则直接用上面的目录）
+      </label>
+      <div class="hint" id="ns-status" style="color:#9a9aa4;margin-top:10px">会启动一个内嵌终端的新会话；等它落盘后自动接入本任务。</div>`,
+    submitLabel: '启动',
+    onSubmit: async () => {
+      const cwd = $('ns-cwd').value.trim();
+      if (!cwd) throw new Error('请填一个工作目录');
+      const useWt = $('ns-worktree').checked;
+      $('ns-status').textContent = '正在启动会话…';
+      const r = await api(`/api/tasks/${currentTask.id}/launch`, {
+        method: 'POST',
+        body: { tool, cwd, worktree: useWt, embed: true },
+      });
+      if (!r.ok) throw new Error(r.error || '启动失败');
+      // 轮询找这个目录下该工具的新会话文件（最多 90s；claude 要等第一条消息落盘）
+      $('ns-status').textContent = '会话已启动，等它落盘后自动接入…（可以先在终端里说第一句话）';
+      const knownFiles = new Set();
+      try { (await api(`/api/available?tool=${tool}&all=1`)).items?.forEach((s) => knownFiles.add(s.file)); } catch { /* 空=首会话也能识别 */ }
+      const deadline = Date.now() + 90_000;
+      let attached = false;
+      while (Date.now() < deadline && !attached) {
+        await new Promise((res) => setTimeout(res, 2000));
+        let items = [];
+        try { items = (await api(`/api/available?tool=${tool}&all=1`)).items || []; } catch { continue; }
+        const fresh = items
+          .filter((s) => !knownFiles.has(s.file) && (sameDir(s.cwd, cwd) || sameDir(s.cwd, r.cwd || '')))
+          .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0];
+        if (!fresh) continue;
+        let ar = await api(`/api/tasks/${currentTask.id}/nodes`, { method: 'POST', body: { tool, sessionId: fresh.id, file: fresh.file, allowCreateProject: true } });
+        // 自动捕获可能抢先把新会话挂进了「自动获取 · 目录名」任务：返回 exists + 那边的 taskId/nodeId
+        if (ar.kind === 'exists' && ar.taskId) {
+          await loadState();
+          if (ar.taskId !== currentTask?.id) await openTask(ar.taskId);
+          if (ar.nodeId) openSessionTab(ar.nodeId);
+          toast(`新会话已由自动获取接入「${ar.taskTitle}」，已打开`);
+          return;
+        }
+        if (ar.needsProject) continue; // 建不了项目文件夹就下轮再试（allowCreateProject 已带上）
+        if (!ar.ok) continue;
+        attached = true;
+        const nodeId = ar.node?.id || ar.nodeId;
+        await loadState();
+        await refreshTask();
+        if (nodeId) openSessionTab(nodeId);
+        if (r.worktree?.created) toast(`已在 worktree 里开新会话：${r.worktree.branch}`);
+        else if (r.worktree?.reason) toast(`仓库不干净，直接用 ${cwd}`);
+        else toast('新会话已接入本任务');
+      }
+      if (!attached) throw new Error('90 秒内没等到会话文件。先在终端里说一句（比如「你好」），再点「接入已有会话」选它。');
+    },
+  });
+  // 目录选择：桌面版走系统目录框（preload pickDir），浏览器降级走 Chromium File System API；都没有就手输
+  $('ns-browse')?.addEventListener('click', async () => {
+    const input = $('ns-cwd');
+    try {
+      if (window.sbridgeFiles?.pickDir) {
+        const dir = await window.sbridgeFiles.pickDir();
+        if (dir) input.value = dir;
+        return;
+      }
+      if (window.showDirectoryPicker) {
+        const handle = await window.showDirectoryPicker({ mode: 'read' });
+        if (handle?.name) input.value = handle.name; // 浏览器拿不到绝对路径，只能给目录名提示
+        toast('浏览器里拿不到完整路径，请补全绝对路径或改用桌面客户端');
+        return;
+      }
+      toast('当前环境不支持目录选择框，请手动输入路径');
+      input.focus();
+    } catch { /* 用户取消或权限拒绝：保持原值 */ }
+  });
+  // 工具切换
+  $('ns-tool')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tool]');
+    if (!b) return;
+    tool = b.dataset.tool;
+    $('ns-tool').innerHTML = toolButtonsHtml(tool);
+  });
+  setTimeout(() => $('ns-cwd')?.focus(), 30);
+}
+
+function sameDir(a, b) {
+  const norm = (p) => String(p || '').replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+  return norm(a) === norm(b);
+}
+
 function createTaskFlow(projectId = null) {
   const options = state.projects
     .map((p) => `<option value="${p.id}" ${p.id === projectId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`)

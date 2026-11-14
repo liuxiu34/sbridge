@@ -107,9 +107,19 @@ function scan(cwd) {
     try {
       const status = git(['status', '--porcelain'], g.root);
       const rows = status ? status.split('\n').filter(Boolean) : [];
+      // numstat：每文件 +/- 行数（未跟踪文件不在 diff 里，保持 null）
+      const numstat = new Map();
+      for (const line of (git(['diff', '--numstat', '--no-color'], g.root) || '').split('\n')) {
+        const m = /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(line.trim());
+        if (m) numstat.set(m[3].trim().replace(/^.* -> /, ''), { added: m[1] === '-' ? null : Number(m[1]), deleted: m[2] === '-' ? null : Number(m[2]) });
+      }
       // 过滤索引器/缓存/数据库类路径：只保留真正的代码改动
       state.dirty = rows
-        .map((row) => ({ code: row.slice(0, 2).trim(), path: row.slice(3).trim() }))
+        .map((row) => {
+          const p = row.slice(3).trim().replace(/^.* -> /, '');
+          const ns = numstat.get(p) || null;
+          return { code: row.slice(0, 2).trim(), path: row.slice(3).trim(), added: ns?.added ?? null, deleted: ns?.deleted ?? null };
+        })
         .filter((d) => !isNoisePath(d.path));
       state.dirtyCount = state.dirty.length;
     } catch { /* ignore */ }

@@ -7,6 +7,12 @@ const DATA_FILE = path.join(DATA_DIR, 'board.json');
 
 const EMPTY = { projects: [], tasks: [] };
 
+/* 标题/文本清洗：U+FFFD（替换符）说明源数据在别的编码下就丢过字节，
+   存进看板只会显示成"钻石问号"乱码。统一替换成可读的占位符。 */
+export function cleanTitle(s) {
+  return String(s || '').replace(/\uFFFD/g, '？').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim();
+}
+
 /* 按 (mtime,size) 缓存解析结果：handleApi 每个请求都会 load()，
    看板数据大时反复 JSON.parse 会拖慢首屏和每个 API。save() 后立刻失效。 */
 let cache = null;
@@ -19,6 +25,13 @@ export function load() {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
     const db = JSON.parse(raw);
     const val = { projects: db.projects || [], tasks: db.tasks || [] };
+    // 读入时顺手清洗历史数据里的 U+FFFD 乱码标题（写入侧已清洗，这里兜底旧数据）
+    let dirty = false;
+    for (const t of val.tasks) {
+      const fixed = cleanTitle(t.title);
+      if (fixed !== t.title) { t.title = fixed; dirty = true; }
+    }
+    if (dirty) { try { fs.writeFileSync(DATA_FILE, JSON.stringify(val, null, 1), 'utf8'); } catch { /* 只读盘时忽略 */ } }
     cache = { key, db: val };
     return val;
   } catch {
@@ -74,7 +87,7 @@ export function createTask(db, { projectId, title }) {
   const task = {
     id: uid(),
     projectId: projectId || null,
-    title: String(title || '').trim().slice(0, 120) || '新任务',
+    title: cleanTitle(title).slice(0, 120) || '新任务',
     status: 'active',
     note: '',
     createdAt: new Date().toISOString(),

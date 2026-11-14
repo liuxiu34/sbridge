@@ -511,7 +511,7 @@ const CLIP_ARGS = 2000;
 
 function clipEvt(evt) {
   const clip = (value, max) => `${value.slice(0, max)}\n…[已截断，共 ${value.length} 字符]`;
-  if (evt.kind === 'user' || evt.kind === 'assistant') {
+  if (evt.kind === 'user' || evt.kind === 'assistant' || evt.kind === 'thinking') {
     if (typeof evt.text === 'string' && evt.text.length > CLIP_TEXT) evt.text = clip(evt.text, CLIP_TEXT);
   } else if (evt.kind === 'tool_call' && typeof evt.args === 'string' && evt.args.length > CLIP_ARGS) {
     evt.args = clip(evt.args, CLIP_ARGS);
@@ -1000,47 +1000,129 @@ if (req.method === 'GET' && resource === 'stream') {
     const headlessBusy = globalThis.__sbHeadlessBusy || (globalThis.__sbHeadlessBusy = new Set());
     const headlessStatus = globalThis.__sbHeadlessStatus || (globalThis.__sbHeadlessStatus = new Map());
     const headlessChildren = globalThis.__sbHeadlessChildren || (globalThis.__sbHeadlessChildren = new Map());
+    // 发送队列：AI 正在执行时来的新消息进队，当前执行结束后自动依次发送（不再 409 拒绝）
+    const headlessQueues = globalThis.__sbHeadlessQueues || (globalThis.__sbHeadlessQueues = new Map()); // nodeId -> [{id, message, ts}]
     const HEADLESS_TIMEOUT_MS = 10 * 60_000; // 看门狗：CLI 卡死时不能把该会话永久占住
+    const HEADLESS_QUEUE_CAP = 10;
     const HEADLESS_ENV = { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
-    if (req.method === 'GET' && sub === 'headless-status') {
-      return json(res, 200, { status: headlessStatus.get(url.searchParams.get('nodeId')) || null });
+    // 权限三档 → 各工具无头 flags。pi/OMP 的 -p 本就不做工具确认；「只读」档 pi/OMP 没有对应能力（send-headless 里拦下）
+    const permLevel = (node) => (node.perm || 'normal');
+    function headlessBaseCmd(tool, sessionId, level) {
+      if (tool === 'claude') {
+        if (level === 'ro') return `claude -p --permission-mode acceptEdits --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash,Task"${sessionId ? ` --resume ${sessionId}` : ''}`;
+        if (level === 'yolo') return `claude -p --dangerously-skip-permissions${sessionId ? ` --resume ${sessionId}` : ''}`;
+        return `claude -p --permission-mode acceptEdits${sessionId ? ` --resume ${sessionId}` : ''}`;
+      }
+      if (tool === 'codex') {
+        const sandbox = level === 'ro' ? 'read-only' : level === 'yolo' ? 'danger-full-access' : 'workspace-write';
+        return `codex exec --skip-git-repo-check -s ${sandbox}${sessionId ? ` resume ${sessionId}` : ''} -`;
+      }
+      if (tool === 'pi') return `pi${sessionId ? ` --session ${sessionId}` : ''} -p`;
+      if (tool === 'omp') return `omp -p${sessionId ? ` --resume ${sessionId}` : ''}`;
+      return null;
     }
-    // 取消无头执行（前端状态条上的「取消执行」）
-    if (req.method === 'POST' && (sub === 'cancel-headless' || (sub === 'nodes' && subId && extra === 'cancel-headless'))) {
-      const body = await readBody(req);
-      const nid = subId || body.nodeId;
-      if (!nid || !headlessBusy.has(nid)) return json(res, 409, { error: '没有正在执行的任务' });
-      const child = headlessChildren.get(nid);
-      headlessStatus.set(nid, { running: false, exitCode: -2, canceled: true, stderrTail: '已取消', endedAt: Date.now(), tool: headlessStatus.get(nid)?.tool });
-      headlessBusy.delete(nid);
-      headlessChildren.delete(nid);
-      killProcessTree(child?.pid);
-      return json(res, 200, { ok: true });
+    const queueOf = (nid) => headlessQueues.get(nid) || [];
+    // ---------- pi/omp RPC 长驻驱动：支持「引导」（运行中注入，模型不中断） ----------
+    // 协议（pi --mode rpc）：stdin JSONL 命令（prompt/steer/abort），stdout JSONL 事件
+    // （agent_start / agent_settled / queue_update...）。会话文件由 pi 自己落盘，轨迹照常。
+    const rpcDrivers = globalThis.__sbRpcDrivers || (globalThis.__sbRpcDrivers = new Map()); // nodeId -> driver
+    const rpcBin = (tool) => (tool === 'pi' ? 'pi' : null); // 引导仅 pi(omp 的 rpc 方言有差异,暂回退单发路径)
+    const rpcSend = (driver, obj) => { try { driver.proc.stdin.write(JSON.stringify(obj) + '\n'); } catch { /* 进程已死 */ } };
+    function rpcSettle(node, extra = {}) {
+      clearTimeout((rpcDrivers.get(node.id) || {}).watchdog);
+      headlessBusy.delete(node.id);
+      headlessChildren.delete(node.id);
+      const prev = headlessStatus.get(node.id);
+      if (!prev || prev.running) headlessStatus.set(node.id, { running: false, exitCode: extra.exitCode ?? 0, stderrTail: extra.stderrTail || '', endedAt: Date.now(), tool: node.tool, ...extra });
+      const q = queueOf(node.id);
+      if (q.length) setTimeout(() => drainHeadless(extra.taskId, node), 600);
     }
-    if (req.method === 'POST' && sub === 'send-headless') {
-      const body = await readBody(req);
-      const node = db.tasks.flatMap((t) => (t.id === id ? t.nodes : [])).find((n) => n.id === body.nodeId);
-      if (!node) return json(res, 404, { error: '节点不存在' });
+    function getRpcDriver(node, cwd, taskId) {
+      const existing = rpcDrivers.get(node.id);
+      if (existing && existing.proc && existing.proc.exitCode == null && existing.cwd === cwd) return existing;
+      if (existing) { try { existing.proc.kill(); } catch { /* 已退出 */ } rpcDrivers.delete(node.id); }
       const tool = TOOLS[node.tool];
-      if (!tool) return json(res, 400, { error: '未知工具' });
-      const message = String(body.message || '').trim();
-      if (!message) return json(res, 400, { error: '消息为空' });
-      const cwd = expandPath(node.cwd || '');
-      if (!cwd || !fs.existsSync(cwd)) return json(res, 400, { error: `工作目录不存在: ${cwd}` });
       let sessionId = node.sessionId || null;
       if (!sessionId && node.file && !node.file.startsWith('sqlite:')) {
         try { sessionId = tool.read(node.file).id; } catch { /* 读不出就开新会话 */ }
       }
-      if (headlessBusy.has(node.id)) return json(res, 409, { error: '上一条消息还在执行中，等它完成再发' });
-      // 无头命令：claude -p --resume <id> / pi --session <id> -p / codex exec resume <id>。
-      // 消息一律走 stdin（避开 Windows 命令行引号地狱）；NO_PROXY 放行本地网关。
-      const baseCmd = {
-        claude: `claude -p --permission-mode acceptEdits${sessionId ? ` --resume ${sessionId}` : ''}`,
-        pi: `pi${sessionId ? ` --session ${sessionId}` : ''} -p`,
-        codex: `codex exec --skip-git-repo-check -s workspace-write${sessionId ? ` resume ${sessionId}` : ''} -`,
-        omp: `omp -p${sessionId ? ` --resume ${sessionId}` : ''}`,
-      }[node.tool];
-      if (!baseCmd) return json(res, 400, { error: '该工具暂不支持无头发送' });
+      const args = ['--mode', 'rpc'];
+      if (sessionId) args.push(node.tool === 'pi' ? '--session' : '--resume', sessionId);
+      const cmd = `${rpcBin(node.tool)} ${args.join(' ')}${modelFlags(node.tool, node.model, node.modelProvider)}${effortFlags(node.tool, node.effort)}`;
+      const proc = spawn(cmd, { cwd, env: HEADLESS_ENV, windowsHide: true, shell: true });
+      const driver = { node: { ...node }, proc, cwd, taskId, buf: '', watchdog: null };
+      proc.stdout?.on('data', (d) => {
+        driver.buf += d.toString('utf8');
+        let i;
+        while ((i = driver.buf.indexOf('\n')) >= 0) {
+          const line = driver.buf.slice(0, i); driver.buf = driver.buf.slice(i + 1);
+          if (!line.trim()) continue;
+          let rec; try { rec = JSON.parse(line); } catch { continue; }
+          if (rec.type === 'agent_start') {
+            headlessBusy.add(node.id);
+            headlessStatus.set(node.id, { running: true, startedAt: Date.now(), tool: node.tool });
+            clearTimeout(driver.watchdog);
+            driver.watchdog = setTimeout(() => rpcSend(driver, { type: 'abort' }), HEADLESS_TIMEOUT_MS);
+            driver.watchdog.unref?.();
+          } else if (rec.type === 'agent_settled') {
+            rpcSettle(node, { taskId, exitCode: rec.aborted ? -2 : 0, canceled: !!rec.aborted, stderrTail: rec.aborted ? '已中断' : '' });
+          }
+        }
+      });
+      proc.on('exit', () => {
+        if (rpcDrivers.get(node.id) === driver) rpcDrivers.delete(node.id);
+        if (headlessBusy.has(node.id)) rpcSettle(node, { taskId, exitCode: -1, stderrTail: 'RPC 进程退出' });
+      });
+      rpcDrivers.set(node.id, driver);
+      return driver;
+    }
+    // pi/omp 发起一轮:闲 → prompt;忙 → steer(引导,不中断) ;launchRun 统一入口
+    function rpcLaunch(taskId, node, message, { steer = false, followUp = false } = {}) {
+      if (permLevel(node) === 'ro') return { error: 'Pi/OMP 的无头模式没有「只读」档，请把权限切回「常规」再发送' };
+      const cwd = expandPath(node.cwd || '');
+      const driver = getRpcDriver(node, cwd, taskId);
+      const busy = headlessBusy.has(node.id);
+      if (busy && steer) {
+        rpcSend(driver, { type: 'steer', message });
+        return { steered: true };
+      }
+      if (busy && followUp) {
+        rpcSend(driver, { id: `p${Date.now().toString(36)}`, type: 'prompt', message, streamingBehavior: 'followUp' });
+        headlessStatus.set(node.id, { running: true, startedAt: Date.now(), tool: node.tool });
+        return {};
+      }
+      if (busy) return { queued: true };
+      headlessBusy.add(node.id);
+      headlessStatus.set(node.id, { running: true, startedAt: Date.now(), tool: node.tool });
+      clearTimeout(driver.watchdog);
+      driver.watchdog = setTimeout(() => rpcSend(driver, { type: 'abort' }), HEADLESS_TIMEOUT_MS);
+      driver.watchdog.unref?.();
+      rpcSend(driver, { id: `p${Date.now().toString(36)}`, type: 'prompt', message });
+      return {};
+    }
+    const launchRun = (taskId, node, message) => {
+      if (rpcBin(node.tool)) return rpcLaunch(taskId, node, message);
+      startHeadlessRun(taskId, node, message);
+    };
+    const drainHeadless = (taskId, node) => {
+      const q = queueOf(node.id);
+      if (headlessBusy.has(node.id) || !q.length) return;
+      const item = q.shift();
+      launchRun(taskId, node, item.message);
+    };
+    // 无头执行一次（工作轨迹主路径）：消息走 stdin，进程退出后由 finish 触发队列 drain
+    function startHeadlessRun(taskId, node, message) {
+      const tool = TOOLS[node.tool];
+      const cwd = expandPath(node.cwd || '');
+      let sessionId = node.sessionId || null;
+      if (!sessionId && node.file && !node.file.startsWith('sqlite:')) {
+        try { sessionId = tool.read(node.file).id; } catch { /* 读不出就开新会话 */ }
+      }
+      const baseCmd = headlessBaseCmd(node.tool, sessionId, permLevel(node));
+      if (!baseCmd) {
+        headlessStatus.set(node.id, { running: false, exitCode: -1, stderrTail: '该工具暂不支持无头发送', endedAt: Date.now(), tool: node.tool });
+        return;
+      }
       const cmd = baseCmd + modelFlags(node.tool, node.model, node.modelProvider) + effortFlags(node.tool, node.effort);
       headlessBusy.add(node.id);
       headlessStatus.set(node.id, { running: true, startedAt: Date.now(), tool: node.tool });
@@ -1050,7 +1132,7 @@ if (req.method === 'GET' && resource === 'stream') {
       } catch (err) {
         headlessBusy.delete(node.id);
         headlessStatus.set(node.id, { running: false, exitCode: -1, stderrTail: String(err.message || err), endedAt: Date.now(), tool: node.tool });
-        return json(res, 500, { error: `启动无头执行失败: ${err.message}` });
+        return;
       }
       child.unref();
       headlessChildren.set(node.id, child);
@@ -1066,6 +1148,8 @@ if (req.method === 'GET' && resource === 'stream') {
         // 取消/超时已经写过终态，退出事件不要覆盖它
         const prev = headlessStatus.get(node.id);
         if (!prev || prev.running) headlessStatus.set(node.id, { running: false, exitCode: code, stderrTail, endedAt: Date.now(), tool: node.tool, ...extra });
+        // 队列里还有消息 → 稍等片刻自动连发（给会话文件落盘/事件捕获留出间隙）
+        if (queueOf(node.id).length) setTimeout(() => drainHeadless(taskId, node), 600);
       };
       watchdog = setTimeout(() => {
         if (settled) return;
@@ -1075,6 +1159,7 @@ if (req.method === 'GET' && resource === 'stream') {
         headlessChildren.delete(node.id);
         headlessStatus.set(node.id, { running: false, exitCode: -1, timedOut: true, stderrTail, endedAt: Date.now(), tool: node.tool });
         killProcessTree(child.pid);
+        if (queueOf(node.id).length) setTimeout(() => drainHeadless(taskId, node), 600);
       }, HEADLESS_TIMEOUT_MS);
       watchdog.unref?.();
       child.stderr?.on('data', (d) => { stderrTail = (stderrTail + d).slice(-600); });
@@ -1082,7 +1167,138 @@ if (req.method === 'GET' && resource === 'stream') {
       child.stdin?.end();
       child.on('exit', (code) => finish(code));
       child.on('error', (err) => finish(-1, { stderrTail: String(err.message || err) }));
+    }
+    if (req.method === 'GET' && sub === 'headless-status') {
+      const nid = url.searchParams.get('nodeId');
+      return json(res, 200, {
+        status: headlessStatus.get(nid) || null,
+        queue: queueOf(nid).map((it) => ({ id: it.id, message: it.message })),
+      });
+    }
+    // 取消无头执行（前端状态条上的「取消执行」）；pi/omp 走 RPC abort（settle 事件里清状态+连发队列）
+    if (req.method === 'POST' && (sub === 'cancel-headless' || (sub === 'nodes' && subId && extra === 'cancel-headless'))) {
+      const body = await readBody(req);
+      const nid = subId || body.nodeId;
+      if (!nid || !headlessBusy.has(nid)) return json(res, 409, { error: '没有正在执行的任务' });
+      const cnode = db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === nid);
+      if (cnode && rpcBin(cnode.tool)) {
+        const driver = rpcDrivers.get(nid);
+        if (driver) { rpcSend(driver, { type: 'abort' }); return json(res, 200, { ok: true, aborted: 'rpc' }); }
+      }
+      const child = headlessChildren.get(nid);
+      headlessStatus.set(nid, { running: false, exitCode: -2, canceled: true, stderrTail: '已取消', endedAt: Date.now(), tool: headlessStatus.get(nid)?.tool });
+      headlessBusy.delete(nid);
+      headlessChildren.delete(nid);
+      killProcessTree(child?.pid);
+      if (cnode) setTimeout(() => drainHeadless(id, cnode), 600);
       return json(res, 200, { ok: true });
+    }
+    // 无头发送：闲 → 直接执行；忙 → 进队立即 ACK（前端显示「待发」，可撤回）
+    if (req.method === 'POST' && sub === 'send-headless') {
+      const body = await readBody(req);
+      const node = db.tasks.flatMap((t) => (t.id === id ? t.nodes : [])).find((n) => n.id === body.nodeId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      const tool = TOOLS[node.tool];
+      if (!tool) return json(res, 400, { error: '未知工具' });
+      const message = String(body.message || '').trim();
+      if (!message) return json(res, 400, { error: '消息为空' });
+      const cwd = expandPath(node.cwd || '');
+      if (!cwd || !fs.existsSync(cwd)) return json(res, 400, { error: `工作目录不存在: ${cwd}` });
+      if ((node.tool === 'pi' || node.tool === 'omp') && permLevel(node) === 'ro') {
+        return json(res, 400, { error: 'Pi/OMP 的无头模式没有「只读」档，请把权限切回「常规」再发送' });
+      }
+      if (headlessBusy.has(node.id)) {
+        // 忙:引导(pi/omp RPC steer)或进队(其余工具/pi 的排队)
+        if (rpcBin(node.tool) && body.mode === 'steer') {
+          const r = rpcLaunch(id, node, message, { steer: true });
+          if (r.error) return json(res, 400, { error: r.error });
+          return json(res, 200, { ok: true, steered: true });
+        }
+        const q = queueOf(node.id);
+        if (q.length >= HEADLESS_QUEUE_CAP) return json(res, 429, { error: '排队已满（10 条），等执行完或先撤回几条' });
+        const item = { id: `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, message, ts: new Date().toISOString() };
+        q.push(item);
+        headlessQueues.set(node.id, q);
+        return json(res, 200, { ok: true, queued: true, queueLen: q.length, itemId: item.id });
+      }
+      if (rpcBin(node.tool)) {
+        const r = rpcLaunch(id, node, message);
+        if (r.error) return json(res, 400, { error: r.error });
+        return json(res, 200, { ok: true, queued: false });
+      }
+      startHeadlessRun(id, node, message);
+      return json(res, 200, { ok: true, queued: false });
+    }
+    // 中断并发送：杀掉当前执行，立刻用新消息起一次（队列保持不动，之后照常连发）
+    if (req.method === 'POST' && sub === 'nodes' && subId && extra === 'interrupt-send') {
+      const body = await readBody(req);
+      const message = String(body.message || '').trim();
+      if (!message) return json(res, 400, { error: '消息为空' });
+      const task = db.tasks.find((t) => t.id === id);
+      const node = task?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      if (rpcBin(node.tool)) {
+        const driver = rpcDrivers.get(node.id);
+        const wasBusy = headlessBusy.has(node.id);
+        if (wasBusy && driver) rpcSend(driver, { type: 'abort' });
+        if (wasBusy) {
+          // 等 agent_settled(aborted) 清掉 busy 后再起新一轮;若 900ms 还没 settle 就用 followUp 兜底
+          setTimeout(() => {
+            const r = rpcLaunch(id, node, message, { followUp: true });
+            if (r.error) headlessStatus.set(node.id, { running: false, exitCode: -1, stderrTail: r.error, endedAt: Date.now(), tool: node.tool });
+          }, 900);
+        } else {
+          const r = rpcLaunch(id, node, message);
+          if (r.error) return json(res, 400, { error: r.error });
+        }
+        return json(res, 200, { ok: true, interrupted: wasBusy });
+      }
+      if (headlessBusy.has(node.id)) {
+        const child = headlessChildren.get(node.id);
+        headlessStatus.set(node.id, { running: false, exitCode: -2, canceled: true, stderrTail: '已中断（为新消息让路）', endedAt: Date.now(), tool: node.tool });
+        headlessBusy.delete(node.id);
+        headlessChildren.delete(node.id);
+        killProcessTree(child?.pid);
+      }
+      startHeadlessRun(id, node, message);
+      return json(res, 200, { ok: true, interrupted: true });
+    }
+    // 从待发队列撤回一条
+    if (req.method === 'POST' && sub === 'nodes' && subId && extra === 'unqueue') {
+      const body = await readBody(req);
+      const q = queueOf(subId);
+      const i = q.findIndex((it) => it.id === body.itemId);
+      if (i >= 0) q.splice(i, 1);
+      headlessQueues.set(subId, q);
+      return json(res, 200, { ok: true, queueLen: q.length });
+    }
+    // @ 文件搜索：工作目录下按子串匹配相对路径（浅层遍历，跳过依赖目录）
+    if (req.method === 'GET' && sub === 'files') {
+      const task = db.tasks.find((t) => t.id === id);
+      const cwdRaw = url.searchParams.get('cwd') || task?.project?.cwd || task?.cwd || '';
+      const cwd = expandPath(cwdRaw);
+      if (!cwdRaw || !fs.existsSync(cwd)) return json(res, 200, { files: [] });
+      const q = (url.searchParams.get('q') || '').toLowerCase().replace(/[\\/]+/g, '/');
+      const out = [];
+      const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.venv', 'vendor', 'target']);
+      const walk = (dir, rel, depth) => {
+        if (out.length >= 30 || depth > 4) return;
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+          if (out.length >= 30) return;
+          if (e.name.startsWith('.')) continue;
+          const relPath = rel ? `${rel}/${e.name}` : e.name;
+          if (e.isDirectory()) {
+            if (SKIP.has(e.name)) continue;
+            walk(path.join(dir, e.name), relPath, depth + 1);
+          } else if (!q || relPath.toLowerCase().includes(q)) {
+            out.push(relPath);
+          }
+        }
+      };
+      walk(cwd, '', 0);
+      return json(res, 200, { files: out.slice(0, 30) });
     }
 
     // 内嵌终端：在任务里直接启动/恢复一个 agent（接力或手动恢复用）
@@ -1673,6 +1889,20 @@ if (req.method === 'GET' && resource === 'stream') {
         applied = cmd && termmod.writeToNode(node.id, cmd) ? 'term' : 'restart';
       }
       return json(res, 200, { ok: true, effort: node.effort, applied, sync });
+    }
+
+    /* 权限档位：只读(ro)/常规(normal)/全自动(yolo)，无头执行时映射成各工具的 flags */
+    if (req.method === 'POST' && sub === 'nodes' && subId && extra === 'perm') {
+      const body = await readBody(req);
+      const level = String(body.level || 'normal');
+      if (!['ro', 'normal', 'yolo'].includes(level)) return json(res, 400, { error: '未知权限档位' });
+      const fresh = store.load();
+      const node = fresh.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === subId);
+      if (!node) return json(res, 404, { error: '节点不存在' });
+      node.perm = level === 'normal' ? null : level;
+      node.permAt = new Date().toISOString();
+      store.save(fresh);
+      return json(res, 200, { ok: true, perm: level });
     }
 
     /* 右侧面板：改动（git status / 单文件 diff），只读 */

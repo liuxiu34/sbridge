@@ -75,13 +75,25 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       </div>
       <div class="sev-scroll" data-role="streamscroll" hidden><div class="sev-list" data-role="list"></div></div>
       <button type="button" class="stream-bottom" data-role="streambottom" title="滚到最新工作轨迹" hidden>${icon('down')} 回到最新</button>
+      <div class="dock-row" data-role="dockrow" hidden>
+        <div class="queue-bar" data-role="queuebar" hidden></div>
+        <div class="dock-actions" data-role="dockactions" hidden>
+          <button type="button" data-role="steersend" title="不中断当前任务，把输入框内容作为引导注入（模型在本轮工具结束后就能看到，仅 Pi/OMP）" hidden>⚡ 引导</button>
+          <button type="button" data-role="interruptsend" title="中断当前执行，立刻发送输入框里的消息">中断并发送</button>
+          <button type="button" data-role="cancelrun" title="停止当前无头执行（待发队列保留，之后自动继续）">取消执行</button>
+        </div>
+      </div>
       <div class="sess-input" data-role="composer">
-        <div class="composer">
-          <textarea rows="1" data-role="input" placeholder="问点什么，或直接描述任务…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <div class="composer composer-v2">
+          <div class="comp-chips" data-role="chips" hidden></div>
+          <textarea rows="1" data-role="input" placeholder="问点什么，或输入 / 命令、@ 文件…（Enter 发送，Shift+Enter 换行）"></textarea>
           <div class="composer-bar">
-            <button type="button" class="btn-attach" data-role="attach" title="引用本地文件">＋</button>
-            <span class="composer-note" data-role="checkout"></span>
+            <button type="button" class="tbtn" data-role="attach" title="引用本地文件">＋</button>
+            <button type="button" class="tbtn" data-role="at" title="@ 文件：搜索并引用工作目录里的文件">@</button>
+            <button type="button" class="tbtn" data-role="slash" title="命令菜单">/</button>
+            <span class="perm-pill l-normal" data-role="perm" title="无头执行权限档位（点击切换）"><span class="pd"></span><span data-role="permname">常规</span></span>
             <span class="composer-grow"></span>
+            <span class="composer-note" data-role="checkout"></span>
             <button type="button" class="model-btn" data-role="model" title="切换这个会话使用的模型">
               <span class="model-name" data-role="modelname">模型</span>${icon('chevronDown', 12)}
             </button>
@@ -132,7 +144,11 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       setModelLabel(d.current);
     } catch { /* 读不到就保持原样 */ }
   };
-  const closeModelPop = () => { if (modelPop) { modelPop.remove(); modelPop = null; } };
+  let mpOutside = null; // 弹层「点外部关闭」监听（弹层存活期间常驻，关闭时移除）
+  const closeModelPop = () => {
+    if (modelPop) { modelPop.remove(); modelPop = null; }
+    if (mpOutside) { document.removeEventListener('click', mpOutside); mpOutside = null; }
+  };
   const applyModel = async (opt) => {
     if (!opt) return;
     closeModelPop();
@@ -187,10 +203,15 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     modelPop.innerHTML = `
       <div class="mp-head">
         <span class="mp-cube">${icon('cube', 15)}</span>
-        <select class="mp-prov" data-role="prov">
-          ${providers.length ? '<option value="">全部模型</option>' : ''}
-          ${providers.map((p) => `<option value="${escapeHtml(p)}"${p === provFilter ? ' selected' : ''}>${escapeHtml(p)}</option>`).join('')}
-        </select>
+        <div class="mp-prov-wrap">
+          <button type="button" class="mp-prov" data-role="provbtn" title="按供应商/密钥筛选">
+            <span data-role="provname">${escapeHtml(provFilter || (providers.length ? '全部模型' : '全部'))}</span>${icon('chevronDown', 12)}
+          </button>
+          <div class="mp-prov-menu" data-role="provmenu" hidden>
+            ${providers.length ? '<button type="button" class="mp-prov-item" data-pv="">全部模型</button>' : ''}
+            ${providers.map((p) => `<button type="button" class="mp-prov-item" data-pv="${escapeHtml(p)}">${escapeHtml(p)}</button>`).join('')}
+          </div>
+        </div>
         <span class="mp-badge" data-role="badge">${all.length}</span>
       </div>
       <div class="mp-sub">
@@ -234,8 +255,27 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       });
     };
     paint('');
-    modelPop.querySelector('[data-role="prov"]')?.addEventListener('change', (e) => {
-      provFilter = e.target.value;
+    // 供应商（密钥）筛选：自绘下拉（原生 select 在 Electron 主题下弹层显示不出来）
+    const provBtn = modelPop.querySelector('[data-role="provbtn"]');
+    const provMenu = modelPop.querySelector('[data-role="provmenu"]');
+    const provName = modelPop.querySelector('[data-role="provname"]');
+    const provLabelText = () => provFilter || (providers.length ? '全部模型' : '全部');
+    provBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!provMenu) return;
+      provMenu.hidden = !provMenu.hidden;
+      if (!provMenu.hidden) {
+        provMenu.querySelectorAll('[data-pv]').forEach((b) => b.classList.toggle('active', (b.dataset.pv || '') === provFilter));
+        const act = provMenu.querySelector('.active');
+        if (act) act.scrollIntoView({ block: 'nearest' });
+      }
+    });
+    provMenu?.addEventListener('click', (e) => {
+      const item = e.target.closest('[data-pv]');
+      if (!item) return;
+      provFilter = item.dataset.pv || '';
+      if (provName) provName.textContent = provLabelText();
+      provMenu.hidden = true;
       paint(input.value);
     });
     input.addEventListener('input', () => paint(input.value));
@@ -271,12 +311,12 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       range.addEventListener('click', (e) => e.stopPropagation());
     }
     input.focus();
-    // 点面板外收起
+    // 点面板外收起（弹层存活期间常驻监听；closeModelPop 负责移除）
     setTimeout(() => {
-      const outside = (e) => {
-        if (modelPop && !modelPop.contains(e.target) && e.target !== modelBtn && !modelBtn.contains(e.target)) closeModelPop();
+      mpOutside = (e) => {
+        if (modelPop && !modelPop.contains(e.target) && !modelBtn.contains(e.target)) closeModelPop();
       };
-      document.addEventListener('click', outside, { once: true });
+      document.addEventListener('click', mpOutside);
     }, 0);
   };
   modelBtn?.addEventListener('click', (e) => { e.stopPropagation(); openModelPop(); });
@@ -400,26 +440,116 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     clearTimeout(headlessPollTimer);
     const tick = async () => {
       if (!headlessRunning) return;
-      let st = null;
-      try { st = (await api(`/api/tasks/${currentTask.id}/headless-status?nodeId=${node.id}`)).status; } catch { /* 下轮再试 */ }
+      let r = null;
+      try { r = await api(`/api/tasks/${currentTask.id}/headless-status?nodeId=${node.id}`); } catch { headlessPollTimer = setTimeout(tick, 2000); return; }
+      renderQueue(r?.queue || []);
+      const st = r?.status;
       if (st && !st.running) {
-        headlessRunning = false;
+        // 刚结束：把结局注入工作轨迹（折叠回合并显示 ✓/✗/已取消 行）
+        cot.setHeadlessOutcome({ exitCode: st.exitCode, canceled: !!st.canceled, timedOut: !!st.timedOut, stderrTail: st.stderrTail || '' });
         if (st.canceled) toast('已取消执行');
         else if (st.timedOut) toast('执行超时（10 分钟），已终止');
         else if (st.exitCode !== 0 && st.stderrTail) {
-          toast('执行失败: ' + st.stderrTail.slice(-140));
+          toast('执行失败: ' + String(st.stderrTail).slice(-140));
         }
-        cot.setConnected(true);
-        cot.refresh();
-        try { renderSubagents(); } catch { /* ignore */ }
+        if (!(r?.queue || []).length) {
+          headlessRunning = false;
+          updateDockRow();
+          cot.setConnected(true);
+          cot.refresh();
+          try { renderSubagents(); } catch { /* ignore */ }
+          return;
+        }
+        // 队列还有消息：服务端稍候自动开始下一条，继续轮询
+        headlessPollTimer = setTimeout(tick, 2000);
         return;
       }
       headlessPollTimer = setTimeout(tick, 2000);
     };
     tick();
   };
+
+  /* ---------- 底部 dock：待发队列条 + 执行操作按钮 ---------- */
+  const dockRowEl = host.querySelector('[data-role="dockrow"]');
+  const queueBarEl = host.querySelector('[data-role="queuebar"]');
+  const dockActionsEl = host.querySelector('[data-role="dockactions"]');
+  let lastQueue = [];
+  const steersendBtn = host.querySelector('[data-role="steersend"]');
+  const updateDockRow = () => {
+    if (!dockRowEl) return;
+    dockRowEl.hidden = !(headlessRunning || lastQueue.length > 0);
+    if (dockActionsEl) {
+      dockActionsEl.hidden = !headlessRunning;
+      // 引导目前只有 pi 支持（RPC steer）；omp 方言待适配,claude/codex 单发无注入点
+      if (steersendBtn) steersendBtn.hidden = !(headlessRunning && node.tool === 'pi');
+    }
+  };
+  const renderQueue = (queue) => {
+    lastQueue = Array.isArray(queue) ? queue : [];
+    if (!queueBarEl) return;
+    if (!lastQueue.length) {
+      queueBarEl.hidden = true;
+      queueBarEl.innerHTML = '';
+    } else {
+      queueBarEl.hidden = false;
+      queueBarEl.innerHTML = `<span class="queue-label">⏳ ${lastQueue.length} 条待发</span>`
+        + lastQueue.map((it) => `
+          <span class="queue-chip" title="${escapeHtml(it.message)}"><span class="qt">${escapeHtml(truncate(it.message, 26))}</span><button type="button" class="x" data-unqueue="${escapeHtml(it.id)}" title="撤回这条消息">✕</button></span>`).join('')
+        + `<span class="queue-note">完成后自动依次发送</span>`;
+    }
+    updateDockRow();
+  };
+  queueBarEl?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-unqueue]');
+    if (!btn) return;
+    try {
+      await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/unqueue`, { method: 'POST', body: { itemId: btn.dataset.unqueue } });
+      renderQueue(lastQueue.filter((it) => it.id !== btn.dataset.unqueue));
+    } catch (err) { toast(err.message); }
+  });
+  host.querySelector('[data-role="cancelrun"]')?.addEventListener('click', () => cancelHeadless());
+  host.querySelector('[data-role="steersend"]')?.addEventListener('click', async () => {
+    const text = (inputTa?.value || '').trim();
+    if (!text) { toast('先在输入框里写好要引导的内容'); return; }
+    try {
+      await api(`/api/tasks/${currentTask.id}/send-headless`, { method: 'POST', body: { nodeId: node.id, message: text, mode: 'steer' } });
+      cot.addLocalUser(text);
+      if (inputTa) inputTa.value = '';
+      toast('已作为引导注入：模型不中断，本轮工具结束后就能看到');
+    } catch (err) { toast(err.message); }
+  });
+  host.querySelector('[data-role="interruptsend"]')?.addEventListener('click', async () => {
+    const text = (inputTa?.value || '').trim();
+    if (!text) { toast('先在输入框里写好要发送的内容，再点「中断并发送」'); return; }
+    try {
+      await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/interrupt-send`, { method: 'POST', body: { nodeId: node.id, message: text } });
+      cot.addLocalUser(text);
+      if (inputTa) inputTa.value = '';
+      headlessRunning = true;
+      headlessStartedAt = Date.now();
+      startHeadlessStatusPoll();
+      toast('已中断当前执行，新消息已发送');
+    } catch (err) { toast(err.message); }
+  });
+  // 面板重开时接上既有状态：这个会话可能已经有正在跑的无头任务/待发队列
+  (async () => {
+    try {
+      const r = await api(`/api/tasks/${currentTask.id}/headless-status?nodeId=${node.id}`);
+      renderQueue(r?.queue || []);
+      if (r?.status?.running && !headlessRunning) {
+        headlessRunning = true;
+        headlessStartedAt = Date.parse(r.status.startedAt) || Date.now();
+        updateDockRow();
+        startHeadlessStatusPoll();
+        cot.refresh();
+      } else {
+        updateDockRow();
+      }
+    } catch { /* 服务暂时不可达，忽略 */ }
+  })();
   scrollEl.addEventListener('scroll', scheduleStreamUi, { passive: true });
 
+  let inputTa = null; // 输入框引用（在下方 if (active) 里赋值；「编辑重发」等回调要用）
   const cot = createCotTimeline(listEl, {
     node,
     isFirstBatch: () => firstBatch,
@@ -430,6 +560,13 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     isHeadlessRunning,
     headlessElapsed,
     scrollEl,
+    onResend: (text) => {
+      if (!inputTa) return;
+      inputTa.value = text;
+      inputTa.dispatchEvent(new Event('input', { bubbles: true }));
+      inputTa.focus();
+      try { inputTa.setSelectionRange(inputTa.value.length, inputTa.value.length); } catch { /* ignore */ }
+    },
   });
   cot.showEmpty('正在载入工作轨迹…');
 
@@ -438,14 +575,15 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   const deliverMessage = async (text) => {
     if (!text) return;
     if (boundRunningTerm(node)) { await sendToAgent(node, text); return; }
-    headlessRunning = true;
-    headlessStartedAt = Date.now();
+    const wasRunning = headlessRunning;
+    if (!wasRunning) { headlessRunning = true; headlessStartedAt = Date.now(); }
     cot.addLocalUser(text);
     try {
-      await api(`/api/tasks/${currentTask.id}/send-headless`, { method: 'POST', body: { nodeId: node.id, message: text } });
+      // 服务端忙时不再 409：直接进待发队列并立即 ACK，当前执行结束后自动依次发送
+      const r = await api(`/api/tasks/${currentTask.id}/send-headless`, { method: 'POST', body: { nodeId: node.id, message: text } });
+      if (r?.queued) toast(`已加入待发队列（第 ${r.queueLen} 条），当前任务完成后自动发送`);
     } catch (err) {
-      headlessRunning = false;
-      cot.refresh();
+      if (!wasRunning) { headlessRunning = false; cot.refresh(); }
       throw err;
     }
     startHeadlessStatusPoll();
@@ -645,6 +783,103 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   if (active) {
     const ta = host.querySelector('[data-role="input"]');
     const btn = host.querySelector('[data-role="send"]');
+    inputTa = ta;
+
+    /* ---------- 附件 chips / @ 文件 / / 命令 / 权限档位 ---------- */
+    const chipsEl = host.querySelector('[data-role="chips"]');
+    let chips = [];
+    const renderChips = () => {
+      if (!chipsEl) return;
+      chipsEl.hidden = !chips.length;
+      chipsEl.innerHTML = chips.map((p, i) => `
+        <span class="comp-chip" title="${escapeHtml(p)}"><span class="qt">${escapeHtml(truncate(p.split(/[\\/]/).pop(), 26))}</span><button type="button" class="x" data-chip-x="${i}" title="移除">✕</button></span>`).join('');
+    };
+    const addChip = (p) => {
+      const v = String(p || '').trim();
+      if (!v || chips.includes(v)) return;
+      chips.push(v);
+      renderChips();
+    };
+    chipsEl?.addEventListener('click', (e) => {
+      const bx = e.target.closest('[data-chip-x]');
+      if (!bx) return;
+      chips.splice(Number(bx.dataset.chipX), 1);
+      renderChips();
+    });
+
+    // @ 文件菜单：搜索当前工作目录（server 端浅层遍历），点击变成 chip
+    const sessInput = host.querySelector('.sess-input');
+    const fileMenu = document.createElement('div');
+    fileMenu.className = 'slash-menu file-menu';
+    fileMenu.hidden = true;
+    sessInput.appendChild(fileMenu);
+    let fileMenuTimer = null;
+    const closeFileMenu = () => { fileMenu.hidden = true; };
+    const openFileMenu = async (q) => {
+      try {
+        const r = await api(`/api/tasks/${currentTask.id}/files?cwd=${encodeURIComponent(node.cwd || '')}&q=${encodeURIComponent(q || '')}`);
+        const files = r.files || [];
+        fileMenu.innerHTML = files.length
+          ? files.slice(0, 12).map((f) => `<button type="button" class="slash-item" data-fref="${escapeHtml(f)}"><span class="slash-cmd">@${escapeHtml(f)}</span></button>`).join('')
+            + `<div class="slash-more">点击引用到消息 · Esc 关闭</div>`
+          : `<div class="slash-more">没有匹配的文件（只搜工作目录浅层）</div>`;
+        fileMenu.hidden = false;
+      } catch { closeFileMenu(); }
+    };
+    const scheduleFileMenu = (q) => {
+      clearTimeout(fileMenuTimer);
+      fileMenuTimer = setTimeout(() => openFileMenu(q), 180);
+    };
+    atmenu: {
+      const atBtn = host.querySelector('[data-role="at"]');
+      atBtn?.addEventListener('click', () => { if (fileMenu.hidden) openFileMenu(''); else closeFileMenu(); ta.focus(); });
+      fileMenu.addEventListener('mousedown', (e) => {
+        const item = e.target.closest('[data-fref]');
+        if (!item) return;
+        e.preventDefault();
+        addChip(item.dataset.fref);
+        // 把输入框里未完成的 @词删掉
+        const pos = ta.selectionStart ?? ta.value.length;
+        const before = ta.value.slice(0, pos).replace(/(?:^|\s)@([^\s@]*)$/, (m0, pre) => (pre || '') );
+        ta.value = before + ta.value.slice(pos);
+        closeFileMenu();
+        ta.focus();
+      });
+    }
+    host.querySelector('[data-role="slash"]')?.addEventListener('click', () => {
+      ta.value = '/';
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.focus();
+      try { ta.setSelectionRange(1, 1); } catch { /* ignore */ }
+    });
+
+    // 权限档位 pill：点击循环 只读 → 常规 → 全自动
+    const permBtn = host.querySelector('[data-role="perm"]');
+    const permNameEl = host.querySelector('[data-role="permname"]');
+    const PERM_META = [
+      { id: 'ro', name: '只读', hint: '只允许读取与分析，不改文件不跑命令（claude/codex 支持）' },
+      { id: 'normal', name: '常规', hint: '允许改文件与常规命令（默认）' },
+      { id: 'yolo', name: '全自动', hint: '跳过确认由模型自行决定（谨慎使用）' },
+    ];
+    const applyPermUI = (level) => {
+      if (!permBtn || !permNameEl) return;
+      const meta = PERM_META.find((m) => m.id === level) || PERM_META[1];
+      permBtn.className = `perm-pill l-${meta.id}`;
+      permNameEl.textContent = meta.name;
+      permBtn.title = `无头执行权限：${meta.name} — ${meta.hint}（点击切换）`;
+    };
+    applyPermUI(node.perm || 'normal');
+    permBtn?.addEventListener('click', async () => {
+      const cur = node.perm || 'normal';
+      const next = PERM_META[(PERM_META.findIndex((m) => m.id === cur) + 1) % PERM_META.length];
+      try {
+        await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/perm`, { method: 'POST', body: { level: next.id } });
+        node.perm = next.id === 'normal' ? null : next.id;
+        applyPermUI(next.id);
+        toast(`权限档位：${next.name}${next.id === 'ro' && (node.tool === 'pi' || node.tool === 'omp') ? '（注意：Pi/OMP 无头模式暂不支持只读）' : ''}`);
+      } catch (err) { toast(err.message); }
+    });
+
     // 「＋」菜单：上传文件 / 当前工具支持的斜杠命令
     const attachBtn = host.querySelector('[data-role="attach"]');
     attachBtn?.addEventListener('click', () => {
@@ -658,7 +893,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
           try {
             const paths = await pickLocalFiles();
             if (paths.length) {
-              appendFileRefs(ta, paths);
+              paths.forEach(addChip);
               toast(`已引用 ${paths.length} 个文件`);
             }
           } finally { attachBtn.disabled = false; }
@@ -674,7 +909,6 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     /* 斜杠命令菜单 + 历史命令（PgUp/PgDn）：让工作轨迹输入框的手感对齐终端。
        命令表是静态精选（CLI 的完整清单未暴露 API；菜单只做辅助，手输任意命令照常发送）。 */
     const slashList = toolCommands(node.tool);
-    const sessInput = host.querySelector('.sess-input');
     const menu = document.createElement('div');
     menu.className = 'slash-menu';
     menu.hidden = true;
@@ -711,7 +945,17 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       menu.hidden = true;
       ta.focus();
     });
-    ta.addEventListener('input', () => renderMenu(ta.value));
+    ta.addEventListener('input', () => {
+      renderMenu(ta.value);
+      // 输入 @ 触发文件搜索（光标前的 @词 作为过滤条件）
+      const pos = ta.selectionStart ?? ta.value.length;
+      const m = ta.value.slice(0, pos).match(/(?:^|\s)@([^\s@]*)$/);
+      if (m) scheduleFileMenu(m[1]);
+      else closeFileMenu();
+    });
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !fileMenu.hidden) { fileMenu.hidden = true; }
+    });
     ta.addEventListener('keydown', (e) => {
       if (!menu.hidden && menuItems.length) {
         if (e.key === 'ArrowDown') { e.preventDefault(); menuIdx = (menuIdx + 1) % menuItems.length; renderMenu(ta.value); const sel = menu.querySelector('.selected'); sel?.scrollIntoView({ block: 'nearest' }); return; }
@@ -753,21 +997,26 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     let historyDraft = '';
     const doSend = async () => {
       const text = ta.value.trim();
-      if (!text) return;
+      if (!text && !chips.length) return;
       menu.hidden = true;
+      closeFileMenu();
       btn.disabled = true;
       try {
-        if (text.startsWith('/')) {
+        const refs = chips.length ? chips.map((p) => `@${p}`).join(' ') + '\n' : '';
+        const full = (refs + text).trim();
+        if (!refs && text.startsWith('/')) {
           // 斜杠命令 = TUI 指令：确保终端运行并发送，切到终端视图交互
           await sendToAgent(node, text);
           applyStreamView(false);
           await ensureTerminal();
           slashSwitched = true;
         } else {
-          // 终端在跑就写 PTY，否则无头执行（由 deliverMessage 统一处理）
-          await deliverMessage(text);
+          // 终端在跑就写 PTY，否则无头执行（忙时服务端自动排队）
+          await deliverMessage(full);
         }
         ta.value = '';
+        chips = [];
+        renderChips();
       } catch (err) {
         toast(err.message);
       } finally { btn.disabled = false; ta.focus(); }
