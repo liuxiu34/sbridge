@@ -794,9 +794,10 @@ function createCotTimeline(listEl, options) {
     if (paneEl) paneEl.classList.toggle('is-empty', steps.length === 0);
     if (!steps.length) {
       listEl.innerHTML = `<div class="cot-empty">
-        <div class="cot-empty-title">要一起做点什么？</div>
-        <div class="cot-empty-sub">描述任务，或输入 / 查看可用命令</div>
-        <div class="cot-empty-meta">当前工具：${escapeHtml(toolLabel(node.tool))}</div>
+        <div class="empty-tool-mark">${icon('terminal', 14)} ${escapeHtml(toolLabel(node.tool))} · 新会话</div>
+        <div class="cot-empty-title">从一个想法，<br>开始下一步。</div>
+        <div class="cot-empty-sub">描述要实现的功能、需要排查的问题，<br>或接着这个项目继续工作。</div>
+        <div class="cot-empty-meta"><span class="empty-shortcut">@ 引用文件</span><span class="empty-shortcut">/ 使用命令</span><span class="empty-shortcut">接力 · 延续上下文</span></div>
       </div>`;
       titleEl = workingEl = workingLabelEl = workingTimeEl = null;
       scheduleStreamUi();

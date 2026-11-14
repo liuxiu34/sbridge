@@ -25,6 +25,7 @@
       </div>
     </div>
 
+    <button class="btn-ghost sidebar-search" id="btn-search" title="搜索会话（Ctrl+K）">搜索会话</button>
     <button class="btn-primary" id="btn-new-task">＋ 新建任务</button>
     <button class="btn-ghost" id="btn-discover" title="扫描 Codex / Pi / Claude 的会话目录，按项目目录自动归组导入">自动获取项目</button>
 
@@ -41,28 +42,35 @@
         <button class="btn-ghost theme-toggle" id="btn-theme" title="切换浅色 / 深色主题">🌙</button>
         <button class="btn-ghost" id="btn-support" title="赞助支持 sbridge 持续更新" hidden>♥ 支持</button>
       </div>
-      <div class="hint">数据保存在 data/board.json</div>
+      <div class="hint">本地工作区 · 会话自动保存</div>
     </div>
   </aside>
 
   <main class="main">
     <header class="topbar">
-      <div class="sess-tabs" id="sess-tabs"></div>
-      <button class="proj-chip" id="proj-chip" title="项目现状（git / 磁盘）：这里能看到不受工具限制的改动" hidden></button>
+      <button type="button" class="btn-ghost" id="btn-sidebar" aria-label="项目与会话" aria-expanded="false" title="项目与会话"><span data-icon="panel"></span></button>
+      <div class="workspace-identity"><span class="workspace-project" id="workspace-project">工作空间</span><span class="workspace-divider">/</span><span class="workspace-task" id="workspace-task">开始新的工作</span></div>
       <div class="actions" id="task-actions" hidden>
-        <button class="btn-ghost" id="btn-search" title="全局搜索会话（Ctrl+K）">🔍 搜索</button>
-        <button class="btn-ghost" id="btn-board-view2" title="查看完整白板">▦ 白板</button>
-        <button class="btn-ghost" id="btn-split" aria-pressed="false" title="左右分屏显示两个会话">◫ 分屏</button>
+        <button class="btn-ghost" id="btn-launch" title="在当前任务里新建一个编程会话">新开会话</button>
+        <details class="workspace-menu">
+        <summary class="btn-ghost" aria-label="任务操作" title="任务操作"><span data-icon="more"></span></summary>
+        <div class="action-menu">
+        <button class="btn-ghost" id="btn-board-view2" title="查看完整接力关系">接力白板</button>
+        <button class="btn-ghost" id="btn-split" aria-pressed="false" title="左右分屏显示两个会话">分屏</button>
         <span class="split-control" id="split-right-wrap" hidden>
           <span>右侧</span>
           <select class="split-select" id="split-right" aria-label="右侧会话"></select>
         </span>
-        <!-- 新开会话：空任务发起第一场对话（选工具+目录，内嵌终端） -->
-        <button class="btn-ghost" id="btn-launch" title="在这个任务里用 Pi / Codex / Claude 开一场全新对话">▶ 新开会话</button>
         <button class="btn-ghost" id="btn-attach" title="把本机已有的 CLI 会话接进看板">↧ 接入已有会话</button>
+        </div>
+        </details>
       </div>
       <button class="btn-ghost" id="btn-panel" aria-pressed="false" title="面板（Ctrl+B）：改动 / 文件 / 上下文 / Worktree">⋯</button>
     </header>
+    <div class="tabs-row">
+      <div class="sess-tabs" id="sess-tabs"></div>
+      <button class="proj-chip" id="proj-chip" title="项目分支与改动" hidden></button>
+    </div>
 
     <section class="workspace">
       <!-- 完整白板视图（侧栏「白板视图」或顶栏按钮切换） -->

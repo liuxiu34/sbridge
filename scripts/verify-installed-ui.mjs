@@ -9,7 +9,8 @@ import WebSocket from 'ws';
 const require = createRequire(import.meta.url), asar = require('@electron/asar');
 const installation = path.join(process.env.LOCALAPPDATA, 'Programs/sbridge');
 const dataDir = path.join(process.env.APPDATA, 'sbridge/data');
-const output = path.resolve('../research/workflow-audit-20261114');
+const output = path.resolve(process.env.SBRIDGE_QA_OUTPUT || '../research/terminal-resize-1.3.2/installed');
+fs.mkdirSync(output, { recursive: true });
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const initialBoard = fs.readFileSync(path.join(dataDir, 'board.json'));
 const board = JSON.parse(initialBoard);
@@ -54,6 +55,8 @@ try {
   }
   assert.ok(loaded, '安装版页面脚本未加载完成');
   await evaluate(`window.installedErrors=[];window.addEventListener('error',e=>installedErrors.push(e.message));void 0;`);
+  // 安装版只读验收：不自动启动用户 CLI，也不把检测到的模型回填进用户看板。
+  await evaluate(`userSettings.autoStartTerm=false;userSettings.syncModel=false;void 0;`);
   const task = board.tasks.find((t) => t.nodes.some((n) => n.cwd?.toLowerCase() === process.cwd().toLowerCase() && n.file && fs.existsSync(n.file)))
     || board.tasks.find((t) => t.nodes.some((n) => n.file && fs.existsSync(n.file)));
   assert.ok(task);
@@ -62,7 +65,7 @@ try {
   await sleep(2200);
   const ui = await evaluate(`(()=>{const h=document.querySelector('.pane-host.focused')||document;const input=h.querySelector('[data-role="input"]');const r=input?.getBoundingClientRect();return {inputVisible:!!r&&r.height>0&&r.bottom<=innerHeight,interactionPanel:!!h.querySelector('[data-role="interactions"]'),timeline:!!h.querySelector('[data-role="list"]')&& !h.querySelector('[data-role="streamscroll"]').hidden,errors:installedErrors,width:innerWidth,height:innerHeight}})()`);
   assert.equal(ui.inputVisible, true); assert.equal(ui.interactionPanel, true); assert.equal(ui.timeline, true); assert.deepEqual(ui.errors, []);
-  const resources = ['index.html', 'app.css', 'js/pane.js', 'js/interactions.js', 'js/stream.js'];
+  const resources = Object.keys(JSON.parse(fs.readFileSync('sea-config.json', 'utf8')).assets).filter(p => p.startsWith('web/')).map(p => p.slice(4));
   for (const resource of resources) {
     const response = await fetch(base + '/' + resource); assert.equal(response.status, 200);
     assert.equal(sha(Buffer.from(await response.arrayBuffer())), sha(fs.readFileSync(path.join('src/web', resource))), resource);
@@ -72,9 +75,21 @@ try {
   assert.equal(sha(fs.readFileSync(path.join(dataDir, 'board.json'))), sha(initialBoard), '看板数据发生了变化');
   const screenshot = await rpc('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: Math.max(0, ui.height - 200), width: ui.width, height: 200, scale: 1 } });
   fs.writeFileSync(path.join(output, 'installed-composer.png'), Buffer.from(screenshot.data, 'base64'));
+  const workbench = await rpc('Page.captureScreenshot', { format: 'png' });
+  fs.writeFileSync(path.join(output, 'installed-workbench.png'), Buffer.from(workbench.data, 'base64'));
+  const beforeTerms = await (await fetch(base + '/api/terms')).json();
+  await evaluate(`document.querySelector('.pane-host.focused [data-pact="terminal"]').click();void 0;`);
+  await sleep(400);
+  const terminalMode = await evaluate(`(()=>{const h=document.querySelector('.pane-host.focused'),t=h.querySelector('.term-view').getBoundingClientRect(),p=h.querySelector('.session-pane').getBoundingClientRect();return {composerHidden:h.querySelector('.composer-zone').getClientRects().length===0,streamHidden:h.querySelector('.sev-scroll').hidden,terminalVisible:t.height>100,fillsHeight:Math.abs(t.bottom-p.bottom)<1}})()`);
+  assert.deepEqual(terminalMode,{composerHidden:true,streamHidden:true,terminalVisible:true,fillsHeight:true});
+  const termShot=await rpc('Page.captureScreenshot',{format:'png'});
+  fs.writeFileSync(path.join(output,'installed-terminal-mode.png'),Buffer.from(termShot.data,'base64'));
+  assert.deepEqual(await (await fetch(base + '/api/terms')).json(),beforeTerms,'只读切换不能启动终端');
+  await evaluate(`document.querySelector('.pane-host.focused [data-pact="stream"]').click();void 0;`);
+  assert.equal(sha(fs.readFileSync(path.join(dataDir,'board.json'))),sha(initialBoard));
   const result = { passed: true, version: installedPackage.version, installation, base, resourcesMatched: resources.length,
     projects: board.projects.length, tasks: board.tasks.length, nodes: board.tasks.flatMap((t) => t.nodes).length,
-    boardUnchanged: true, actualWindow: ui, boardSHA256: sha(initialBoard) };
+    boardUnchanged: true, actualWindow: ui, terminalMode, boardSHA256: sha(initialBoard) };
   fs.writeFileSync(path.join(output, 'installed-verification.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));
 } finally {

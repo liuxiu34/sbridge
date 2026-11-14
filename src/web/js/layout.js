@@ -111,6 +111,8 @@ function toggleBoardView(force) {
 }
 
 function renderTabs() {
+  $('workspace-project').textContent = currentTask?.project?.name || state.projects.find((p) => p.id === currentTask?.projectId)?.name || '独立任务';
+  $('workspace-task').textContent = currentTask?.title || '开始新的工作';
   const el = $('sess-tabs');
   const visible = visiblePaneIds();
   el.innerHTML = openTabs.map((id) => {
@@ -121,7 +123,7 @@ function renderTabs() {
       <span class="chip ${n.tool}">${toolLabel(n.tool)}</span>
       <span class="stab-title">${escapeHtml(truncate(n.title || '(会话)', 22))}</span>
       ${run ? '<span class="run-dot"></span>' : ''}
-      <span class="stab-x" data-close="${id}" title="关闭标签">×</span>
+      <button class="stab-x" data-close="${id}" title="关闭标签" aria-label="关闭 ${escapeHtml(n.title || '会话')}">${icon('x', 11)}</button>
     </div>`;
   }).join('') || '<div class="tabs-empty">没有打开的会话</div>';
   updateSplitControls();
@@ -296,11 +298,15 @@ function renderMiniChain() {
   el.innerHTML = items.map((n) => {
     const depth = Math.round((positions.get(n.id)?.x || 0) / 318);
     const run = nodeTermFor(n);
-    return `<div class="mini-card ${visible.includes(n.id) && !boardMode ? 'active' : ''} ${n.id === activeTabId && !boardMode ? 'focused' : ''}" data-mnode="${n.id}" style="margin-left:${Math.min(depth, 6) * 14}px" title="${escapeHtml(n.title || '')}">
-      <span class="chip ${n.tool}">${toolLabel(n.tool)}</span>
-      <span class="mini-title">${escapeHtml(truncate(n.title || '(会话)', 16))}</span>
-      ${run ? '<span class="run-dot"></span>' : ''}
-    </div>`;
+    const parent = findNode(n.parentNodeId);
+    const phase = paneHandles.get(n.id)?.getStatus?.();
+    const relation = parent ? `${n.edgeKind === 'branch' ? '分支自' : n.edgeKind === 'side' ? '侧聊自' : '接力自'} ${toolLabel(parent.tool)}` : '起始会话';
+    const status = phase?.running ? (phase.phase === 'waiting-input' ? '待回答' : '执行中') : run ? '终端运行' : n.id === activeTabId && !boardMode ? '当前' : '';
+    return `<button type="button" class="mini-card ${visible.includes(n.id) && !boardMode ? 'active' : ''} ${n.id === activeTabId && !boardMode ? 'focused' : ''}" data-mnode="${n.id}" style="--chain-indent:${Math.min(depth, 3) * 10}px" title="${escapeHtml(n.title || '')}${parent ? ` · ${escapeHtml(parent.title || '')}` : ''}">
+      <span class="mini-content"><span class="mini-title">${escapeHtml(n.title || '(会话)')}</span>
+      <span class="mini-meta"><span class="chip ${n.tool}">${toolLabel(n.tool)}</span><span>${escapeHtml(relation)}</span></span></span>
+      ${status ? `<span class="mini-state ${phase?.running ? 'busy' : ''}">${status}</span>` : ''}
+    </button>`;
   }).join('');
   el.querySelectorAll('[data-mnode]').forEach((c) => c.addEventListener('click', (e) => {
     if (e.shiftKey) openInOtherSlot(c.dataset.mnode);

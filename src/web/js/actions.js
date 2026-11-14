@@ -17,7 +17,7 @@ document.addEventListener('keydown', (e) => {
     toggleSidePanel();
     return;
   }
-  if (e.key === 'Escape' && sidePanelOpen() && $('modal').hidden) {
+  if (e.key === 'Escape' && !e.defaultPrevented && sidePanelOpen() && $('modal').hidden && !document.querySelector('details.workspace-menu[open], details.pane-menu[open], .model-pop')) {
     toggleSidePanel(false);
   }
 });

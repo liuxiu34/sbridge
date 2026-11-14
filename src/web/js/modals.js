@@ -2,14 +2,29 @@
 
 /* ---------------- 弹窗 ---------------- */
 function openModal({ title, bodyHtml, submitLabel = '确定', onSubmit }) {
+  $('modal')._cleanup?.();
+  const previousFocus = document.activeElement;
   $('modal-title').textContent = title;
   $('modal-body').innerHTML = bodyHtml;
   // submitLabel 为空 = 只展示内容，不放提交按钮
-  $('modal-foot').innerHTML = `<button class="btn-ghost" id="modal-cancel">取消</button>
+  $('modal-foot').innerHTML = `<button class="btn-ghost" id="modal-cancel">${submitLabel ? '取消' : '关闭'}</button>
     ${submitLabel ? `<button class="btn-primary" id="modal-submit">${submitLabel}</button>` : ''}`;
   $('modal').hidden = false;
 
-  const close = () => { $('modal').hidden = true; $('modal-body').innerHTML = ''; };
+  const cleanup = () => document.removeEventListener('keydown', onKey, true);
+  const close = () => { cleanup(); $('modal').hidden = true; $('modal-body').innerHTML = ''; if (previousFocus?.isConnected) previousFocus.focus(); };
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+    if (e.key !== 'Tab') return;
+    const focusable = [...$('modal').querySelectorAll('button, input, textarea, select, a[href], [tabindex="0"]')].filter(el => !el.disabled && el.getClientRects().length);
+    const first = focusable[0], last = focusable.at(-1);
+    if (e.shiftKey && (document.activeElement === first || !$('modal').contains(document.activeElement))) { e.preventDefault(); last?.focus(); }
+    else if (!e.shiftKey && (document.activeElement === last || !$('modal').contains(document.activeElement))) { e.preventDefault(); first?.focus(); }
+  };
+  $('modal')._cleanup = cleanup;
+  document.addEventListener('keydown', onKey, true);
+  $('modal-body').querySelector('input:not([type="checkbox"]), textarea, select')?.focus();
+  if (!$('modal').contains(document.activeElement)) $('btn-close-modal').focus();
   $('btn-close-modal').onclick = close;
   $('modal-cancel').onclick = close;
   const submitBtn = $('modal-submit');
@@ -354,15 +369,15 @@ function openHandoffModal(node) {
   const others = (state.tools?.length ? state.tools : DEFAULT_TOOLS).filter((t) => t.id !== node.tool);
   let sel = others[0]?.id || null;
   openModal({
-    title: `智能接力：${toolLabel(node.tool)} → ?`,
+    title: `从 ${toolLabel(node.tool)} 接力`,
     bodyHtml: `
-      <div class="hint" style="color:#9a9aa4;margin-bottom:10px">生成检查点（含增量捕获与 LLM 加工，约 10-60 秒），写入目标工具原生新会话并在 sbridge 内直接打开。</div>
+      <div class="hint" style="margin:10px 0 16px;line-height:1.8">选择接力工具。当前会话会保留，项目进度将交给新会话继续，通常需要 10–60 秒。</div>
       <div class="pick-list">${others.map((t, i) => `
-        <div class="pick ${i === 0 ? 'selected' : ''}" data-to="${t.id}">
+        <button type="button" class="pick ${i === 0 ? 'selected' : ''}" data-to="${t.id}" aria-pressed="${i === 0}">
           <span class="pick-radio"></span>
           <div class="pick-main"><div class="pick-title">${escapeHtml(t.label)}</div>
-          <div class="pick-sub">检查点注入其原生会话，接力链 +1</div></div>
-        </div>`).join('')}</div>`,
+          <div class="pick-sub">在 ${escapeHtml(t.label)} 中延续项目进度</div></div>
+        </button>`).join('')}</div>`,
     submitLabel: '开始接力',
     onSubmit: async () => {
       if (!sel) throw new Error('请选择目标工具');
@@ -372,8 +387,9 @@ function openHandoffModal(node) {
   $('modal-body').querySelectorAll('[data-to]').forEach((el) => {
     el.addEventListener('click', () => {
       sel = el.dataset.to;
-      $('modal-body').querySelectorAll('.pick').forEach((x) => x.classList.remove('selected'));
+      $('modal-body').querySelectorAll('.pick').forEach((x) => { x.classList.remove('selected'); x.setAttribute('aria-pressed', 'false'); });
       el.classList.add('selected');
+      el.setAttribute('aria-pressed', 'true');
     });
   });
 }
@@ -442,9 +458,11 @@ function openSearchModal() {
       <div class="search-results" id="search-results"></div>`,
     submitLabel: '',
   });
-  const $q = () => $('search-q');
-  const $hint = () => $('search-hint');
-  const $results = () => $('search-results');
+  // 绑定本次弹窗节点；关闭或重新打开时，旧请求不能写入新弹窗。
+  const searchInput = $('search-q'), searchHint = $('search-hint'), searchResults = $('search-results'), searchDeep = $('search-deep');
+  const $q = () => searchInput;
+  const $hint = () => searchHint;
+  const $results = () => searchResults;
 
   const renderResults = (results) => {
     if (!results.length) { $results().innerHTML = '<div class="empty-tree">没有匹配的会话</div>'; return; }
@@ -478,20 +496,21 @@ function openSearchModal() {
   };
 
   const run = async () => {
+    if (!searchInput.isConnected) return;
     const q = $q().value.trim();
-    const deep = $('search-deep').checked;
+    const deep = searchDeep.checked;
     const seq = ++reqSeq;
     if (!q) { $results().innerHTML = ''; $hint().textContent = '输入关键词开始搜索'; return; }
     $hint().textContent = deep ? '深度搜索中（最多约 4 秒）…' : '搜索中…';
     try {
       const data = await api(`/api/search?q=${encodeURIComponent(q)}&deep=${deep ? 1 : 0}&limit=50`);
-      if (seq !== reqSeq) return;
+      if (seq !== reqSeq || !searchInput.isConnected) return;
       $hint().textContent = data.results.length
         ? `${data.results.length} 条结果${data.truncated ? '（结果较多，已截断）' : ''}`
         : '没有找到匹配';
       renderResults(data.results);
     } catch (err) {
-      if (seq === reqSeq) $hint().textContent = `搜索失败: ${err.message}`;
+      if (seq === reqSeq && searchInput.isConnected) $hint().textContent = `搜索失败: ${err.message}`;
     }
   };
 

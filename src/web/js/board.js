@@ -151,7 +151,7 @@ function renderBoard() {
         <span>${fmtTokens(meta.tokens || 0)} tokens</span>
         ${n.trimmedCount ? `<span>·</span><span>省略 ${n.trimmedCount} 条</span>` : ''}
       </div>
-      <div class="card-foot">${escapeHtml(n.sessionId || '')}</div>
+      <div class="card-foot" title="${escapeHtml(n.sessionId || '')}">${icon('folder', 12)} ${escapeHtml(String(n.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '本地会话')}</div>
     </div>`;
   }).join('');
 

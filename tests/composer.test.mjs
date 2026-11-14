@@ -11,7 +11,7 @@ function fixture() {
   const sent = [], pending = [], errors = [];
   const ta = { value: '草稿', focus() {} };
   const ctx = vm.createContext({
-    ta, crypto: webcrypto, chips: [], composing: false, submitting: false, draftRevision: 0, menu: {}, btn: {},
+    ta, crypto: webcrypto, chips: [], showingStream: true, composing: false, submitting: false, draftRevision: 0, menu: {}, btn: {},
     closeFileMenu() {}, renderChips() {}, pushHistory() {}, toast: (s) => errors.push(s),
     isComposing: (e) => e.isComposing || e.keyCode === 229,
     deliverMessage(text) { sent.push(text); return new Promise((resolve, reject) => pending.push({ resolve, reject })); },
@@ -21,6 +21,13 @@ function fixture() {
   return { ctx, ta, sent, pending, errors };
 }
 const enter = (extra = {}) => ({ key: 'Enter', shiftKey: false, preventDefault() {}, ...extra });
+
+test('终端模式不能通过隐藏的聊天输入提交草稿', async () => {
+  const h = fixture(); h.ctx.showingStream = false;
+  await h.ctx.send(); h.ctx.key(enter());
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.ta.value, '草稿');
+});
 
 test('中文选字与已被菜单处理的 Enter 不提交', () => {
   const h = fixture();

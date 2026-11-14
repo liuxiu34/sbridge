@@ -1,6 +1,6 @@
 /* sbridge · 会话面板：createSessionPane（工作轨迹 + 终端 + 输入 + 进度提示） */
 
-/* 一个会话面板：默认终端（主视图）+ 工作轨迹（⌁ 切换查看）+ 输入 + 工具条 */
+/* 两种独立输入模式：工作轨迹使用聊天输入区，终端直接使用 CLI。 */
 /* 子代理修复记录弹窗：展示 .sbridge-fix 的 prompt/日志，并一键打开/接入子代理会话 */
 function openSubagentModal(parentNode, data) {
   const fix = data.fix || {};
@@ -55,15 +55,22 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         <span class="pane-caption" title="${escapeHtml(node.title || '')}">${escapeHtml(caption || node.title || '(会话)')}</span>
         <span class="pane-status" data-role="status"></span>
         <span class="pane-tools">
-          <button type="button" class="pbtn" data-pact="stream" aria-pressed="false" title="查看 AI 工作轨迹（步骤、查询、结果与来源）">${icon('timeline')} 工作轨迹</button>
+          <span class="view-switch" role="group" aria-label="会话视图">
+          <button type="button" class="pbtn" data-pact="stream" aria-pressed="true" title="工作轨迹">${icon('timeline')} 工作轨迹</button>
+          <button type="button" class="pbtn" data-pact="terminal" aria-pressed="false" title="原始终端">${icon('terminal')} 终端</button>
+          </span>
+          <button type="button" class="pbtn" data-pact="handoff" title="把上下文接力到其他工具">${icon('handoff')} 接力</button>
+          <details class="pane-menu">
+          <summary class="pbtn" aria-label="会话操作" title="会话操作">${icon('more')}</summary>
+          <span class="action-menu">
           <button type="button" class="pbtn" data-pact="selfcheck" title="让这个会话自检：确认是否掌握项目最新、完整进度（只检查、不改文件）">${icon('radar')} 自检</button>
-          <button type="button" class="pbtn ctx-btn" data-pact="ctx" title="会话上下文用量"><svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="ctx-ring-track" cx="10" cy="10" r="8"/><circle class="ctx-ring-val" cx="10" cy="10" r="8"/></svg><span class="ctx-ring-text" data-role="ctxtext">–</span></button>
-          <button type="button" class="pbtn" data-pact="handoff" title="智能接力到其他工具">${icon('handoff')} 接力</button>
+          <button type="button" class="pbtn ctx-btn" data-pact="ctx" title="会话上下文用量"><span class="ctx-ring-wrap"><svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="ctx-ring-track" cx="10" cy="10" r="8"/><circle class="ctx-ring-val" cx="10" cy="10" r="8"/></svg><span class="ctx-ring-text" data-role="ctxtext">–</span></span>上下文用量</button>
           <button type="button" class="pbtn" data-pact="worktree" title="在右侧面板查看独立 worktree 的改动并合并到主分支">${icon('git')} Worktree</button>
-          <button type="button" class="pbtn" data-pact="export" title="导出该会话为 Markdown（只读）">${icon('download')}</button>
+          <button type="button" class="pbtn" data-pact="export" title="导出该会话为 Markdown（只读）">${icon('download')} 导出会话</button>
           <button type="button" class="pbtn danger" data-pact="cancelheadless" title="取消正在执行的无头任务" hidden>${icon('stop')} 取消执行</button>
           <button type="button" class="pbtn danger" data-pact="stopterm" title="停止该会话的终端进程（相当于在终端里输入退出命令）" hidden>${icon('stop')} 停止</button>
-          <button type="button" class="pbtn danger" data-pact="close" title="关闭标签" aria-label="关闭标签">${icon('x', 13)}</button>
+          <button type="button" class="pbtn" data-pact="close" title="关闭标签" aria-label="关闭标签">${icon('x', 13)} 关闭标签</button>
+          </span></details>
         </span>
       </div>
       <div class="fork-alert" data-role="forkalert" hidden></div>
@@ -77,7 +84,9 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         <button type="button" class="term-bottom" data-role="termbottom" title="滚到最新输出" hidden>${icon('down')} 最新</button>
       </div>
       <div class="sev-scroll" data-role="streamscroll" hidden><div class="sev-list" data-role="list"></div></div>
+      <div class="composer-zone">
       <button type="button" class="stream-bottom" data-role="streambottom" title="滚到最新工作轨迹" hidden>${icon('down')} 回到最新</button>
+      <div class="composer-stack">
       <div class="execution-owner" data-role="executionowner" hidden>
         <span>此会话正在原始终端中运行</span>
         <button type="button" data-role="claimbackground">停止终端并在此继续</button>
@@ -86,7 +95,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       <div class="dock-row" data-role="dockrow" hidden>
         <div class="queue-bar" data-role="queuebar" hidden></div>
         <div class="dock-actions" data-role="dockactions" hidden>
-          <button type="button" data-role="steersend" title="${node.tool === 'claude' ? '把输入框内容排入当前会话，完成本轮后处理' : '把输入框内容作为运行中引导；等待回答时排入下一轮'}" hidden>${node.tool === 'claude' ? '下一轮补充' : '⚡ 引导'}</button>
+          <button type="button" data-role="steersend" title="${node.tool === 'claude' ? '把输入框内容排入当前会话，完成本轮后处理' : '把输入框内容作为运行中引导；等待回答时排入下一轮'}" hidden>${icon('handoff', 12)} ${node.tool === 'claude' ? '下一轮补充' : '引导'}</button>
           <button type="button" data-role="interruptsend" title="中断当前执行，立刻发送输入框里的消息">中断并发送</button>
           <button type="button" data-role="cancelrun" title="停止当前执行并暂停队列，待发消息保留">取消执行</button>
         </div>
@@ -94,21 +103,24 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       <div class="sess-input" data-role="composer">
         <div class="composer composer-v2">
           <div class="comp-chips" data-role="chips" hidden></div>
-          <textarea rows="1" data-role="input" placeholder="问点什么，或输入 / 命令、@ 文件…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <textarea rows="2" data-role="input" aria-label="发送消息" placeholder="描述你想完成的任务，或输入 @ 引用文件、/ 使用命令…"></textarea>
           <div class="composer-bar">
-            <button type="button" class="tbtn" data-role="attach" title="引用本地文件">＋</button>
+            <span class="composer-tool" title="当前编程工具"><span class="chip ${node.tool}">${escapeHtml(toolLabel(node.tool))}</span></span>
+            <button type="button" class="tbtn" data-role="attach" title="引用本地文件" aria-label="引用本地文件">${icon('plus', 14)}</button>
             <button type="button" class="tbtn" data-role="at" title="@ 文件：搜索并引用工作目录里的文件">@</button>
             <button type="button" class="tbtn" data-role="slash" title="命令菜单">/</button>
-            <span class="perm-pill l-normal" data-role="perm" title="无头执行权限档位（点击切换）"><span class="pd"></span><span data-role="permname">常规</span></span>
+            <button type="button" class="perm-pill l-normal" data-role="perm" title="执行权限（点击切换）"><span class="pd"></span><span data-role="permname">常规</span></button>
             <span class="composer-grow"></span>
-            <span class="composer-note" data-role="checkout"></span>
             <button type="button" class="model-btn" data-role="model" title="切换这个会话使用的模型">
               <span class="model-name" data-role="modelname">模型</span>${icon('chevronDown', 12)}
             </button>
+            <button type="button" class="model-btn effort-btn" data-role="effort" title="调整思考强度" hidden><span data-role="effortname">思考 · 默认</span>${icon('chevronDown', 10)}</button>
             <button type="button" class="btn-send" data-role="send" title="发送（Enter）">${icon('arrowUp', 15)}</button>
           </div>
         </div>
       </div>
+      <div class="composer-caption"><span class="composer-note" data-role="checkout"></span><span data-role="phasehint">Enter 发送 · Shift + Enter 换行</span></div>
+      </div></div>
     </div>`;
 
   host.addEventListener('click', () => setFocusedPane(node.id), true);
@@ -116,6 +128,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   const scrollEl = host.querySelector('[data-role="streamscroll"]');
   const statusEl = host.querySelector('[data-role="status"]');
   const termViewEl = host.querySelector('[data-role="termview"]');
+  const composerZone = host.querySelector('.composer-zone');
   const termMountEl = host.querySelector('[data-role="termmount"]');
   const termStartBtn = host.querySelector('[data-role="termstart"]');
   const termBottomBtn = host.querySelector('[data-role="termbottom"]');
@@ -137,6 +150,12 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   let modelPop = null;
   let modelData = { current: '', options: [] };
   let modelRefreshedAt = 0;
+  const refreshEffortLabel = () => {
+    const button = host.querySelector('[data-role="effort"]');
+    button.hidden = !modelData.effort?.supported;
+    const selected = (modelData.effort?.levels || []).find((l) => l.id === modelData.effortCurrent);
+    host.querySelector('[data-role="effortname"]').textContent = `思考 · ${selected?.label || '默认'}`;
+  };
   const modelSync = () => userSettings.syncModel !== false;
   const shortModel = (s) => String(s || '').replace(/\[[^\]]+\]$/, '');
   const setModelLabel = (m) => {
@@ -150,12 +169,14 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       const d = await api(`/api/tasks/${taskId}/nodes/${node.id}/model?sync=${modelSync() ? 1 : 0}`);
       modelData = d;
       setModelLabel(d.current);
+      refreshEffortLabel();
     } catch { /* 读不到就保持原样 */ }
   };
   let mpOutside = null; // 弹层「点外部关闭」监听（弹层存活期间常驻，关闭时移除）
   const closeModelPop = () => {
     if (modelPop) { modelPop.remove(); modelPop = null; }
     if (mpOutside) { document.removeEventListener('click', mpOutside); mpOutside = null; }
+    modelBtn?.setAttribute('aria-expanded', 'false');
   };
   const applyModel = async (opt) => {
     if (!opt) return;
@@ -167,6 +188,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       });
       modelData.current = opt.id;
       setModelLabel(opt.id);
+      await loadModel(); // 换模型后重新计算它支持的思考档位。
       toast(r.applied === 'term'
         ? `已切换模型：${shortModel(opt.id)}（终端已同步）`
         : `已切换模型：${shortModel(opt.id)}（下次终端/发送生效）`);
@@ -180,6 +202,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         body: { level, sync: modelSync() },
       });
       modelData.effortCurrent = r.effort || '';
+      refreshEffortLabel();
       if (!keepOpen) closeModelPop();
       const label = r.effort ? effortLabel(r.effort) : '默认';
       if (r.applied === 'term') toast(`思考强度：${label}（终端已同步）`);
@@ -188,9 +211,10 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     } catch (err) { toast(err.message); }
   };
   const openModelPop = async () => {
-    if (!modelBtn || !composerEl) return;
+    if (!modelBtn || !composerEl || !showingStream) return;
     if (modelPop) { closeModelPop(); return; }
     await loadModel();
+    if (disposed || !showingStream) return;
     const all = modelData.options || [];
     const cur = modelData.current || '';
     const curOpt = all.find((o) => o.id === cur) || null;
@@ -208,8 +232,12 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         : defIdx >= 0 ? `${levels[defIdx].label}（默认）` : '默认';
     modelPop = document.createElement('div');
     modelPop.className = 'model-pop';
+    modelPop.setAttribute('role', 'dialog');
+    modelPop.setAttribute('aria-label', '模型与思考强度');
+    modelBtn.setAttribute('aria-expanded', 'true');
     modelPop.innerHTML = `
       <div class="mp-head">
+        <span class="mp-source-label">模型来源</span>
         <span class="mp-cube">${icon('cube', 15)}</span>
         <div class="mp-prov-wrap">
           <button type="button" class="mp-prov" data-role="provbtn" title="按供应商/密钥筛选">
@@ -243,6 +271,12 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       </div>
       <div class="model-foot">${modelSync() ? '与终端同步：开' : '与终端同步：关（在设置里改）'}</div>`;
     composerEl.appendChild(modelPop);
+    // 弹层留在会话内，按实际可见空间收缩模型列表，避免在小窗口中从顶部被裁掉。
+    const available = composerEl.getBoundingClientRect().top - host.getBoundingClientRect().top - 12;
+    modelPop.style.maxHeight = `${Math.max(160, available)}px`;
+    modelPop.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); closeModelPop(); modelBtn.focus(); }
+    });
     const listEl = modelPop.querySelector('[data-role="modellist"]');
     const input = modelPop.querySelector('[data-role="modelsearch"]');
     const badge = modelPop.querySelector('[data-role="badge"]');
@@ -328,6 +362,11 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     }, 0);
   };
   modelBtn?.addEventListener('click', (e) => { e.stopPropagation(); openModelPop(); });
+  host.querySelector('[data-role="effort"]')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await openModelPop();
+    modelPop?.querySelector('.mp-effort input, .mp-effort [tabindex]')?.focus();
+  });
   loadModel();
   // 进度分叉提示，两个按钮时机不同：
   //   跳转到最新会话 = 仅链内有更新的后代时出现（同链新会话取代了本会话）
@@ -415,8 +454,8 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   renderSubagents();
   let firstBatch = true;
   let gone = false;
-  let rawTerm = null; // { dispose, refit }
-  let showingStream = true; // 默认显示工作轨迹（终端退居「TUI 交互层」，检测到确认框自动切过去）
+  let rawTerm = null; // { id, dispose, refit, focus }
+  let showingStream = true; // 默认工作轨迹，用户选择终端后保持原生 CLI 模式
   let streamRevealed = false;
   let streamUiFrame = 0;
   let cotTimer = 0;
@@ -456,7 +495,9 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       try {
         const r = await api(`/api/tasks/${taskId}/headless-status?nodeId=${node.id}`);
         if (disposed || version !== pollVersion) return;
+        const previousPhase = `${executionSnapshot?.status?.running}|${executionSnapshot?.status?.phase}`;
         executionSnapshot = r;
+        if (previousPhase !== `${r.status?.running}|${r.status?.phase}`) renderMiniChain();
         if (r.session?.id) node.sessionId = r.session.id;
         if (r.session?.file && r.session.file !== node.file) {
           node.file = r.session.file;
@@ -468,6 +509,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         headlessStartedAt = Number(r.status?.startedAt) || Date.parse(r.status?.startedAt) || 0;
         renderQueue(r.queue || []);
         renderInteractions(r.interactions || []);
+        host.querySelector('[data-role="phasehint"]').textContent = r.interactions?.length ? '等待你的回答 · 提交后继续执行' : headlessRunning ? '执行中 · 新消息将按顺序处理' : 'Enter 发送 · Shift + Enter 换行';
         host.querySelector('[data-role="executionowner"]').hidden = !r.terminal;
         if (r.outcome?.runId && r.outcome.runId !== lastOutcomeId) {
           lastOutcomeId = r.outcome.runId;
@@ -758,6 +800,10 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   const statusTimer = setInterval(() => {
     if (gone) return;
     const running = isTerminalRunning();
+    if (!showingStream && rawTerm && !mounting && !running) {
+      termStartBtn.hidden = false;
+      termStartBtn.innerHTML = icon('play') + ' 重新启动终端';
+    }
     if (stopBtn) stopBtn.hidden = !running; // 有活终端才显示「⏹ 停止」
     if (cancelHeadlessBtn) cancelHeadlessBtn.hidden = !headlessRunning; // 无头执行中才显示「取消执行」
     if (headlessRunning) {
@@ -1000,7 +1046,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     });
     let historyDraft = '';
     const doSend = async (mode = 'send') => {
-      if (submitting || composing) return;
+      if (!showingStream || submitting || composing) return;
       const original = ta.value;
       const revision = draftRevision;
       const sentChips = [...chips];
@@ -1028,7 +1074,6 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
           await sendToAgent(node, text);
           applyStreamView(false);
           await ensureTerminal();
-          slashSwitched = true;
         } else {
           // 普通消息始终交给后台执行；忙时服务端排队，终端占用时提示用户。
           await deliverMessage(full, requestId);
@@ -1040,7 +1085,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         renderChips();
       } catch (err) {
         toast(err.message);
-      } finally { submitting = false; btn.disabled = false; ta.focus(); }
+      } finally { submitting = false; btn.disabled = false; if (showingStream) ta.focus(); else rawTerm?.focus(); }
     };
     submitDraft = doSend;
     btn.onclick = () => doSend();
@@ -1062,25 +1107,23 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   stopBtn?.addEventListener('click', () => stopNodeTerm(node));
   // 📜 会话动态 ⇄ 终端 切换（不销毁终端）
   const streamBtn = host.querySelector('[data-pact="stream"]');
-  let slashSwitched = false; // 斜杠命令切到终端交互后置位：对话框结束自动回工作轨迹
+  const terminalBtn = host.querySelector('[data-pact="terminal"]');
   const applyStreamView = (v) => {
-    showingStream = v;
-    termViewEl.hidden = v;
-    scrollEl.hidden = !v;
-    streamBtn.innerHTML = v ? (icon('terminal') + ' 终端') : (icon('timeline') + ' 工作轨迹');
-    streamBtn.title = v ? '返回原始终端' : '查看 AI 工作轨迹（步骤、查询、结果与来源）';
-    streamBtn.classList.toggle('active', v);
-    streamBtn.setAttribute('aria-pressed', String(v));
     if (!v && headlessRunning) {
-      showingStream = true;
-      termViewEl.hidden = true;
-      scrollEl.hidden = false;
-      streamBtn.innerHTML = icon('terminal') + ' 终端';
-      streamBtn.setAttribute('aria-pressed', 'true');
       toast('当前任务仍在工作轨迹中执行，结束后可打开原始终端');
       return;
     }
+    showingStream = v;
+    host.querySelector('.session-pane').classList.toggle('is-terminal', !v);
+    composerZone.hidden = !v;
+    termViewEl.hidden = v;
+    scrollEl.hidden = !v;
+    streamBtn.classList.toggle('active', v);
+    streamBtn.setAttribute('aria-pressed', String(v));
+    terminalBtn.classList.toggle('active', !v);
+    terminalBtn.setAttribute('aria-pressed', String(!v));
     if (!v) {
+      closeModelPop();
       streamBottomBtn.hidden = true;
       rawTerm?.refit();
       ensureTerminal(); // 首次进入终端视图：按需挂载（容器此刻可见，一切正常）
@@ -1096,7 +1139,8 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     }
   };
   const setStreamView = (v) => { if (showingStream !== v) applyStreamView(v); };
-  streamBtn?.addEventListener('click', () => applyStreamView(!showingStream));
+  streamBtn?.addEventListener('click', () => setStreamView(true));
+  terminalBtn?.addEventListener('click', () => setStreamView(false));
   applyStreamView(true); // 默认显示工作轨迹（模板初始态是终端，这里纠正）
   /* TUI 交互提醒：终端出现确认框/选择框（信任、恢复选择、/model 之类的 picker）时，
      工作轨迹里脉冲提示「终端」按钮——用户点一下即进入终端视图（此刻才按需挂载，容器
@@ -1106,11 +1150,10 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     onTuiDialog: (active) => {
       const paneEl = host.querySelector('.session-pane');
       if (active && paneEl?.classList.contains('active')) {
-        streamBtn.classList.add('attn');
+        terminalBtn.classList.add('attn');
         toast('终端有待处理的确认框：点「终端」查看处理');
       } else if (!active) {
-        streamBtn.classList.remove('attn');
-        if (slashSwitched) { slashSwitched = false; setStreamView(true); }
+        terminalBtn.classList.remove('attn');
       }
     },
   };
@@ -1119,16 +1162,27 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
      resize 清 buffer），所以终端只在终端视图可见时才挂载。聊天消息不依赖挂载
      （sendToAgent 自己会 spawn/写 PTY），工作轨迹完全自洽。 */
   let mounting = false;
-  const ensureTerminal = async () => {
-    if (rawTerm || mounting) { rawTerm?.refit(); return rawTerm; }
-    mounting = true;
+  const ensureTerminal = async (force = false) => {
+    if (mounting) return mounting;
+    mounting = (async () => {
     try {
       await refreshTerms();
-      if (nodeTermFor(node)) {
-        rawTerm = await mountTerm(termMountEl, node, 0, tuiHooks);
-      } else {
-        rawTerm = await mountTerm(termMountEl, node, 0, tuiHooks); // mountTerm 内部会 spawn
+      if (disposed || showingStream) return null;
+      const live = nodeTermFor(node);
+      if (rawTerm && live?.id === rawTerm.id) {
+        rawTerm.refit(); rawTerm.focus();
+        termStartBtn.hidden = true;
+        return rawTerm;
       }
+      // 退出信息继续留在屏幕上，由用户显式重启，避免启动失败后循环拉起。
+      if (!force && !live && (rawTerm || userSettings.autoStartTerm === false)) {
+        termStartBtn.hidden = false;
+        return null;
+      }
+      rawTerm?.dispose(); rawTerm = null;
+      rawTerm = await mountTerm(termMountEl, node, 0, tuiHooks);
+      if (disposed) { rawTerm?.dispose(); rawTerm = null; return null; }
+      if (!showingStream) { rawTerm?.refit(); rawTerm?.focus(); }
       termStartBtn.hidden = true;
       refreshTermIndicators();
       return rawTerm;
@@ -1137,31 +1191,24 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       termStartBtn.hidden = false;
       return null;
     } finally { mounting = false; }
+    })();
+    return mounting;
   };
   const autoMount = async () => {
     // 默认工作轨迹视图：不自动挂载（隐藏挂载会丢内容）。终端在用户切到终端视图时按需挂载。
     await refreshTerms();
-    termStartBtn.hidden = true; // 工作轨迹下无需启动按钮
-    termBottomBtn.hidden = true;
+    if (showingStream) { termStartBtn.hidden = true; termBottomBtn.hidden = true; }
   };
   autoMount();
   termStartBtn.addEventListener('click', async () => {
     termStartBtn.disabled = true;
     termStartBtn.innerHTML = icon('play') + ' 启动中…';
     try {
-      rawTerm = await mountTerm(termMountEl, node, 0, tuiHooks);
-      termStartBtn.hidden = true;
-      refreshTermIndicators();
-      // resume 的终端不会回放历史对话（Pi/Codex TUI 只画新交互），
-      // 会话有历史时自动切到「工作轨迹」让用户先看到之前的对话；
-      // 想直接对话再点「⌨ 终端」切回来即可。
-      if (node.summary?.messageCount > 0) {
-        const streamBtn = host.querySelector('[data-pact="stream"]');
-        if (streamBtn && streamBtn.getAttribute('aria-pressed') !== 'true') streamBtn.click();
-      }
+      await ensureTerminal(true);
     } catch (err) {
       toast(err.message);
       termStartBtn.hidden = false; // 自动启动失败时按钮要重新出现（手动路径本就可见）
+    } finally {
       termStartBtn.disabled = false;
       termStartBtn.innerHTML = icon('play') + ' 启动此会话的终端';
     }
@@ -1194,6 +1241,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
       if (rawTerm) { try { rawTerm.dispose(); } catch { /* ignore */ } rawTerm = null; }
     },
     refit() { if (!showingStream) rawTerm?.refit(); },
+    getStatus() { return executionSnapshot?.status || null; },
     // 任务数据刷新后（新建了分支/接入了新会话）立刻重算「跳转到最新会话」提示条
     refreshForkAlert: renderForkAlert,
     node,
@@ -1208,7 +1256,7 @@ document.addEventListener('keydown', (e) => {
   if (document.querySelector('.modal-mask:not([hidden])')) return;
   const btn = document.querySelector('.pane-host.focused [data-role="model"]')
     || document.querySelector('[data-role="model"]');
-  if (!btn) return;
+  if (!btn || !btn.getClientRects().length || btn.closest('.is-terminal')) return;
   e.preventDefault();
   btn.click();
 });

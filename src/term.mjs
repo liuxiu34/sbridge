@@ -1,4 +1,5 @@
 import path from 'node:path';
+import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { ROOT } from './paths.mjs';
@@ -27,6 +28,19 @@ const terms = new Map(); // termId -> { id, tool, cwd, pty, buffer: string[], cl
 const BUFFER_MAX_CHARS = 200_000;
 let seq = 0;
 
+/** 与 node-pty 的后端选择保持一致；使用系统 ConPTY 时 build 必须来自服务端系统。 */
+export function windowsPtyForHost(platform = process.platform, release = os.release()) {
+  if (platform !== 'win32') return undefined;
+  const buildNumber = Number(/^(\d+)\.(\d+)\.(\d+)/.exec(release)?.[3] || 0);
+  // node-pty 1.x 在 18309 起启用稳定的 ConPTY；旧 Windows 使用 winpty。
+  return { backend: buildNumber >= 18309 ? 'conpty' : 'winpty', buildNumber };
+}
+
+/** 首次启动、列表重挂与 POST 复用返回相同的实际尺寸 / PTY 元信息。 */
+export function termClientOptions(term) {
+  return { cols: term.pty.cols, rows: term.pty.rows, windowsPty: term.windowsPty };
+}
+
 export function listTerms() {
   return [...terms.values()].map((t) => ({
     id: t.id,
@@ -39,6 +53,7 @@ export function listTerms() {
     // 写成 !t.exitCode 会让正常退出的终端永远显示运行中，前端据此把消息写进死 PTY。
     running: t.exitCode === null,
     exitCode: t.exitCode,
+    ...termClientOptions(t),
   }));
 }
 
@@ -67,12 +82,13 @@ export function tailTextForNode(nodeId, maxChars = 16000) {
 
 /** 启动一个内嵌终端；command 为完整命令行（如 `claude --resume <id>` 或 `codex`）
  *  replay 为显示层历史回放（transcript.mjs 生成）：只写进回放缓冲给浏览器看，不喂 PTY */
-export function spawnTerm({ tool, cwd, command, label, replay, nodeId }) {
+export function spawnTerm({ tool, cwd, command, label, replay, nodeId, cols, rows }) {
   const { spawn: ptySpawn } = getPty();
   const id = `t${Date.now().toString(36)}${(++seq).toString(36)}`;
   // Windows 用 cmd/ConPTY；Linux/macOS 用用户 shell（bash/zsh）
   const isWin = process.platform === 'win32';
-  const shell = isWin ? (process.env.COMSPEC || 'powershell.exe') : (process.env.SHELL || '/bin/bash');
+  const windowsPty = windowsPtyForHost();
+  const shell = isWin ? (process.env.COMSPEC || 'cmd.exe') : (process.env.SHELL || '/bin/bash');
   // Pi 的全屏 TUI 模式（默认）在 resume 时不回放历史对话，屏幕上只有启动横幅；
   // regular 行式模式会把历史对话逐行打印出来（实测 195KB 历史正常显示）。
   // 给 pi 的启动命令统一补上 --tui-mode regular（已有该参数则不重复）。
@@ -81,12 +97,17 @@ export function spawnTerm({ tool, cwd, command, label, replay, nodeId }) {
     cmd = cmd.replace(/^pi\b/, 'pi --tui-mode regular');
   }
   // 用 cmd.exe /c（Windows）或 shell -c（POSIX）承接完整命令行，保留交互 TUI 能力
-  const shellArgs = isWin ? ['/d', '/s', '/c', cmd] : ['-c', cmd];
+  // Windows 传原始命令行：node-pty 会对数组里的引号再转义，cmd 不按该规则解码，
+  // 最终 Pi 收到带字面引号的 provider，带空格的路径也会被拆坏。
+  // /s /c 只剥去这一层外引号，内部的模型、路径引用保留给 cmd 原生解析。
+  const shellArgs = isWin ? `/d /s /c "${cmd}"` : ['-c', cmd];
   const p = ptySpawn(shell, shellArgs, {
     name: 'xterm-256color',
-    cols: 100,
-    rows: 30,
+    cols: Number.isInteger(cols) && cols >= 2 && cols <= 1000 ? cols : 100,
+    rows: Number.isInteger(rows) && rows >= 1 && rows <= 500 ? rows : 30,
     cwd,
+    // 显式选择与客户端 metadata 一致的后端，避免宿主系统与打包 ConPTY DLL 的版本混用。
+    ...(windowsPty ? { useConpty: windowsPty.backend === 'conpty', useConptyDll: false } : {}),
     // WorkBuddy / Git Bash 常把 TERM 设为 dumb，Codex 会直接拒绝启动交互 TUI。
     // 这里显式覆盖为 PTY 实际模拟的终端类型，Pi/Claude 也能拿到一致的颜色能力。
     env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
@@ -98,6 +119,7 @@ export function spawnTerm({ tool, cwd, command, label, replay, nodeId }) {
     // 否则切终端时会把 A 的进程显示到 B 的面板里（用户看到的「四个会话终端内容一样」）
     nodeId: nodeId || null,
     pty: p,
+    windowsPty,
     buffer: replay ? [replay] : [], // 预置历史回放：attachTerm 回放时会一并发出并带 REPLAY_DONE 哨兵
     clients: new Set(),
     exitCode: null,
@@ -144,7 +166,11 @@ export function attachTerm(id, ws) {
     if (text.startsWith('{') && text.includes('"resize"')) {
       try {
         const { resize } = JSON.parse(text);
-        if (resize?.cols && resize?.rows) term.pty.resize(resize.cols, resize.rows);
+        if (Number.isInteger(resize?.cols) && resize.cols >= 2 && resize.cols <= 1000
+          && Number.isInteger(resize?.rows) && resize.rows >= 1 && resize.rows <= 500
+          && (resize.cols !== term.pty.cols || resize.rows !== term.pty.rows)) {
+          term.pty.resize(resize.cols, resize.rows);
+        }
       } catch { /* 非 JSON 输入，当普通键入 */ }
       return;
     }

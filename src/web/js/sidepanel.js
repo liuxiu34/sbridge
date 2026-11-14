@@ -212,7 +212,7 @@ function spRenderLauncher(body) {
       ${SP_ITEMS.map((it, i) => `
         <button type="button" class="sp-item" data-sp="${it.id}" data-i="${i}" title="${escapeHtml(it.hint)}">
           <span class="sp-item-icon">${icon(it.icon, 15)}</span>
-          <span class="sp-item-label">${escapeHtml(it.label)}</span>
+          <span class="sp-item-label"><b>${escapeHtml(it.label)}</b><small>${escapeHtml(it.hint)}</small></span>
           <kbd class="sp-kbd">${it.key}</kbd>
         </button>`).join('')}
     </div>`;
@@ -744,7 +744,7 @@ async function spRenderContext(body, node) {
   ]);
   const ctx = usageRes?.ctx || null;
   const files = filesRes?.files || [];
-  const pct = ctx?.pct ? Math.round(ctx.pct) : 0;
+  const pct = ctx ? Math.min(100, Math.round(Number(ctx.pct) || (ctx.used / Math.max(1, ctx.window)) * 100)) : 0;
   const tab = spState.ctxTab || 'files';
   body.innerHTML = `
     <div class="sp-ctx-head">

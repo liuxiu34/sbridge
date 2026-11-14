@@ -1090,10 +1090,15 @@ if (req.method === 'GET' && resource === 'stream') {
         if (executions.busy(body.nodeId)) return json(res, 409, { error: '工作轨迹中的任务仍在执行或等待回答，结束后可以打开原始终端。' });
         await executions.releaseIdle(body.nodeId);
         const existing = termmod.runningTermForNode(body.nodeId);
-        if (existing) return json(res, 200, { termId: existing.id, cwd: existing.cwd, resumed: true });
+        if (existing) return json(res, 200, { termId: existing.id, cwd: existing.cwd,
+          ...termmod.termClientOptions(existing), resumed: true });
       }
       const boundNode = body.nodeId ? db.tasks.find((t) => t.id === id)?.nodes.find((n) => n.id === body.nodeId) : null;
       let command = boundNode?.sessionId ? RESUME_COMMANDS[body.tool]?.(boundNode.sessionId) : body.resumeCommand || null;
+      // Pi 支持直接恢复 JSONL 路径；按节点文件定位，避免目录迁移后 id 扫描不到旧会话。
+      if (body.tool === 'pi' && boundNode?.file && fs.existsSync(expandPath(boundNode.file))) {
+        command = `pi --session "${expandPath(boundNode.file).replace(/"/g, '')}"`;
+      }
       // 「接入已有会话」的节点只有会话文件、没有 resumeCommand：从文件反解会话 id
       // 构造 resume 命令。否则会当成全新会话启动——终端没有历史，发消息也进了一个
       // 新会话（用户看起来就是「没历史、发消息没反应」）。
@@ -1111,7 +1116,13 @@ if (req.method === 'GET' && resource === 'stream') {
       const modelNode = body.nodeId
         ? db.tasks.flatMap((t) => t.nodes).find((n) => n.id === body.nodeId)
         : null;
-      if (modelNode?.model && !/--model\b/.test(command)) {
+      // Pi 恢复时让 CLI 自己读取历史模型；不要把历史回填值再次强制指定。
+      // 旧模型下架时 Pi 会明确提示并使用其当前默认模型。尚未写进会话的手动选择仍传入。
+      const recordedModel = body.tool === 'pi' && /--session\b/.test(command) && modelNode?.file
+        ? detectSessionModel(modelNode) : null;
+      const restoresRecordedModel = recordedModel && (recordedModel === modelNode?.model
+        || (modelNode?.modelProvider && recordedModel === `${modelNode.modelProvider}/${modelNode.model}`));
+      if (modelNode?.model && !restoresRecordedModel && !/--model\b/.test(command)) {
         command += modelFlags(body.tool, modelNode.model, modelNode.modelProvider);
       }
       // 思考深度也跟着会话走（Pi/OMP --thinking、Claude --effort、Codex -c model_reasoning_effort）
@@ -1124,8 +1135,10 @@ if (req.method === 'GET' && resource === 'stream') {
       // 重绘缓冲区，会原地擦掉注入的回放（分隔线下空白/历史被覆盖等伪影的根源）；
       // 它们的实况 TUI 原生显示，历史看「工作轨迹」。pi 有 --tui-mode regular 自行打印历史。
       const replay = false;
-      const term = termmod.spawnTerm({ tool: body.tool, cwd, command, label: body.label || command, replay, nodeId: body.nodeId || null });
-      return json(res, 200, { termId: term.id, command, cwd, replayed: !!replay, resumed: command !== LAUNCH_COMMANDS[body.tool] });
+      const term = termmod.spawnTerm({ tool: body.tool, cwd, command, label: body.label || command, replay,
+        nodeId: body.nodeId || null, cols: body.cols, rows: body.rows });
+      return json(res, 200, { termId: term.id, command, cwd, replayed: !!replay,
+        ...termmod.termClientOptions(term), resumed: command !== LAUNCH_COMMANDS[body.tool] });
     }
 
     if (req.method === 'GET' && sub === 'scan-new') {

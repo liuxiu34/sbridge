@@ -30,15 +30,15 @@ function openSettingsModal() {
     title: '设置',
     bodyHtml: `
       <label class="set-row">
-        <span class="set-text"><span class="pick-title">打开会话时自动启动终端</span>
-        <span class="pick-sub">焦点面板的会话直接拉起终端进程，不用再点「启动此会话的终端」；关闭后回到手动模式</span></span>
+        <span class="set-text"><span class="pick-title">进入终端视图时自动启动</span>
+        <span class="pick-sub">关闭后，点击「启动此会话的终端」才会启动。工作轨迹始终按需运行。</span></span>
         <span class="switch"><input type="checkbox" id="set-autoterm" ${userSettings.autoStartTerm ? 'checked' : ''}/><i></i></span>
       </label>
-      <div class="set-row">
+      <label class="set-row">
         <span class="set-text"><span class="pick-title">工作轨迹与终端同步模型</span>
         <span class="pick-sub">在工作轨迹切换模型时同步写入终端；终端里用 /model 改过也会自动回填。关闭后两边各改各的，互不影响</span></span>
         <span class="switch"><input type="checkbox" id="set-syncmodel" ${userSettings.syncModel !== false ? 'checked' : ''}/><i></i></span>
-      </div>
+      </label>
       <div class="set-row">
         <span class="set-text"><span class="pick-title">编程工具安装与更新</span>
         <span class="pick-sub">Claude Code / Codex / Pi 是否安装、版本是否最新；缺的直接装，旧的直接更新（默认每 12 小时自动检查一次）</span></span>
@@ -145,6 +145,7 @@ const theme = {
   liveTerms: new Set(), // mountTerm 注册进来，切换时热换肤
   xtermTheme() { return XTERM_THEMES[this.current] || XTERM_THEMES.light; },
   apply() {
+    document.documentElement.style.setProperty('--terminal-bg', this.xtermTheme().background);
     document.body.classList.toggle('theme-dark', this.current === 'dark');
     const btn = $('btn-theme');
     if (btn) btn.innerHTML = `${icon(this.current === 'dark' ? 'sun' : 'moon')} 主题`;

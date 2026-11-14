@@ -1,15 +1,25 @@
 /* sbridge · 侧栏：项目/任务树 */
 
 /* ---------------- 侧栏 ---------------- */
-let treeCollapsed = false; // 项目文件夹下的任务是否全部收起
+// 各项目独立收起并保留选择，刷新任务或切换主题不会重置。
+const COLLAPSED_PROJECTS_KEY = 'sbridge-collapsed-projects';
+let collapsedProjects;
+try { collapsedProjects = new Set(JSON.parse(localStorage.getItem(COLLAPSED_PROJECTS_KEY) || '[]')); }
+catch { collapsedProjects = new Set(); }
+const saveCollapsedProjects = () => {
+  try { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...collapsedProjects])); } catch { /* 私密模式 */ }
+};
 
 function toggleTreeCollapsed() {
-  treeCollapsed = !treeCollapsed;
+  const allClosed = state.projects.length > 0 && state.projects.every((p) => collapsedProjects.has(p.id));
+  collapsedProjects = new Set(allClosed ? [] : state.projects.map((p) => p.id));
+  saveCollapsedProjects();
   renderTree();
 }
 
 function renderTree() {
   const tree = $('tree');
+  const treeCollapsed = state.projects.length > 0 && state.projects.every((p) => collapsedProjects.has(p.id));
   const tasksByProject = new Map();
   const loose = [];
   for (const t of state.tasks) {
@@ -20,33 +30,33 @@ function renderTree() {
   }
 
   const taskHtml = (t) => `
-    <div class="task-item ${t.id === currentTaskId ? 'active' : ''}" data-task="${t.id}">
+    <button type="button" class="task-item ${t.id === currentTaskId ? 'active' : ''}" data-task="${t.id}" ${t.id === currentTaskId ? 'aria-current="true"' : ''}>
       <span class="dot"></span>
       <span class="t-title" title="${escapeHtml(t.title)}">${escapeHtml(t.title)}</span>
-      <span class="count" style="font-size:11px;color:#9a9aa4">${t.nodeCount}</span>
-    </div>`;
+      <span class="count" title="会话数">${t.nodeCount || 0}</span>
+    </button>`;
 
   let html = `<div class="group-label">
     <span>项目文件夹</span>
     <span class="tree-actions">
-      <button class="tree-toggle" id="btn-tree-toggle" title="${treeCollapsed ? '展开所有项目下的任务' : '收起所有项目下的任务'}">${treeCollapsed ? '展开' : '收回'}</button>
+      <button class="tree-toggle" id="btn-tree-toggle" title="${treeCollapsed ? '展开所有项目下的任务' : '收起所有项目下的任务'}">${treeCollapsed ? '展开' : '收起'}</button>
       <button class="add" id="btn-new-project" title="新建项目文件夹">＋</button>
     </span>
   </div>`;
   if (!state.projects.length) {
-    html += '<div class="empty-tree">还没有项目文件夹，先在底部新建一个。</div>';
+    html += '<div class="empty-tree">点击标题旁的 ＋ 添加项目文件夹。</div>';
   }
   for (const p of state.projects) {
     const list = tasksByProject.get(p.id) || [];
     html += `<div class="project">
       <div class="project-name" title="${p.cwd ? escapeHtml(p.cwd) : ''}">
-        <span class="project-dot"></span>
-        <span>${escapeHtml(p.name)}</span>
-        <span class="count">${list.length}</span>
+        <button type="button" class="project-toggle" data-toggle-project="${p.id}" aria-expanded="${!collapsedProjects.has(p.id)}" aria-label="${collapsedProjects.has(p.id) ? '展开' : '收起'} ${escapeHtml(p.name)}">
+          <span class="project-chevron">${icon('chevronDown', 12)}</span>${icon('folder', 14)}<span>${escapeHtml(p.name)}</span><span class="count">${list.length}</span>
+        </button>
         <button class="add" data-new-task-in="${p.id}" title="在此项目下新建任务">＋</button>
         <button class="project-del" data-del-project="${p.id}" title="删除项目文件夹（任务移到独立任务，不会删除本地会话文件）">${icon('x', 11)}</button>
       </div>
-      <div class="project-tasks"${treeCollapsed ? ' hidden' : ''}>${list.map(taskHtml).join('')}</div>
+      <div class="project-tasks"${collapsedProjects.has(p.id) ? ' hidden' : ''}>${list.map(taskHtml).join('')}</div>
     </div>`;
   }
 
@@ -54,6 +64,15 @@ function renderTree() {
   html += loose.length ? loose.map(taskHtml).join('') : '<div class="empty-tree">没有独立任务</div>';
 
   tree.innerHTML = html;
+  tree.querySelectorAll('[data-toggle-project]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = button.dataset.toggleProject;
+      if (collapsedProjects.has(id)) collapsedProjects.delete(id); else collapsedProjects.add(id);
+      saveCollapsedProjects();
+      renderTree();
+      tree.querySelector(`[data-toggle-project="${CSS.escape(id)}"]`)?.focus();
+    });
+  });
   tree.querySelectorAll('[data-task]').forEach((el) => {
     el.addEventListener('click', () => openTask(el.dataset.task));
   });
