@@ -480,8 +480,8 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     dockRowEl.hidden = !(headlessRunning || lastQueue.length > 0);
     if (dockActionsEl) {
       dockActionsEl.hidden = !headlessRunning;
-      // 引导目前只有 pi 支持（RPC steer）；omp 方言待适配,claude/codex 单发无注入点
-      if (steersendBtn) steersendBtn.hidden = !(headlessRunning && node.tool === 'pi');
+      // 引导支持 pi（RPC steer）与 claude（stream-json 原生排队为下一轮）；omp 方言待适配,其余单发无注入点
+      if (steersendBtn) steersendBtn.hidden = !(headlessRunning && (node.tool === 'pi' || node.tool === 'claude'));
     }
   };
   const renderQueue = (queue) => {
