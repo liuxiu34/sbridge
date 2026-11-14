@@ -221,6 +221,16 @@ app.whenReady().then(async () => {
       return r.canceled ? [] : r.filePaths;
     } catch { return []; }
   });
+  // 选择目录（新开会话的工作目录）：返回单个绝对路径，取消返回 null
+  ipcMain.handle('sbridge:pick-directory', async () => {
+    try {
+      const r = await dialog.showOpenDialog(win, {
+        title: '选择工作目录',
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      return r.canceled ? null : (r.filePaths[0] || null);
+    } catch { return null; }
+  });
   createWindow();          // 立刻出闪屏，不用等后端
   startService();
   const ready = await waitForService();

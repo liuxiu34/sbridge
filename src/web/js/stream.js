@@ -111,6 +111,19 @@ function mdMermaidHtml(escapedSrc) {
   return `<pre class="mermaid" data-src="${escapeHtml(src)}">${escapeHtml(src)}</pre>`;
 }
 
+/* 代码围栏 → 统一深色代码盒：hljs 高亮 + 语言标签 + 复制按钮（hljs 不在时退回转义文本） */
+function mdCodeboxHtml(lang, rawCode) {
+  let codeHtml;
+  try {
+    if (window.hljs && lang && window.hljs.getLanguage(lang)) {
+      codeHtml = window.hljs.highlight(rawCode, { language: lang }).value;
+    } else {
+      codeHtml = escapeHtml(rawCode);
+    }
+  } catch { codeHtml = escapeHtml(rawCode); }
+  return `<div class="chat-codebox"><div class="chat-codebar"><span>${escapeHtml(lang || 'text')}</span><button type="button" class="chat-codecopy" data-codecopy>复制</button></div><pre><code class="hljs">${codeHtml}</code></pre></div>`;
+}
+
 function renderMessageHtml(text, max, opts = {}) {
   const allowMermaid = opts.allowMermaid !== false;
   const lines = escapeHtml(clipText(stripEmbeddedToolTrail(text), max)).replace(/\r\n?/g, '\n').split('\n');
@@ -119,6 +132,8 @@ function renderMessageHtml(text, max, opts = {}) {
   let listTag = '';
   let inCode = false;
   let codeLines = [];
+  let codeRawLines = [];
+  let codeLang = '';
   let mermaidLines = null;
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -144,8 +159,10 @@ function renderMessageHtml(text, max, opts = {}) {
     if (/^```/.test(trimmed) && !mermaidLines) {
       const lang = trimmed.slice(3).trim().toLowerCase();
       if (inCode) {
-        out.push(`<pre><code>${codeLines.join('\n')}</code></pre>`);
+        out.push(mdCodeboxHtml(codeLang, codeRawLines.join('\n')));
         codeLines = [];
+        codeRawLines = [];
+        codeLang = '';
         inCode = false;
       } else if (allowMermaid && lang === 'mermaid') {
         flushParagraph();
@@ -155,6 +172,7 @@ function renderMessageHtml(text, max, opts = {}) {
         flushParagraph();
         closeList();
         inCode = true;
+        codeLang = lang;
       }
       continue;
     }
@@ -167,7 +185,7 @@ function renderMessageHtml(text, max, opts = {}) {
       }
       continue;
     }
-    if (inCode) { codeLines.push(line); continue; }
+    if (inCode) { codeLines.push(line); codeRawLines.push(unescapeHtmlEntities(line)); continue; }
     if (!trimmed) { flushParagraph(); closeList(); continue; }
     // Markdown 表格：表头 + 分隔行 + 若干行；单元格内容仍走保守的行内格式化
     if (trimmed.startsWith('|') && mdIsTableSep((lines[i + 1] || '').trim())) {
@@ -213,7 +231,7 @@ function renderMessageHtml(text, max, opts = {}) {
     paragraph.push(trimmed);
   }
   if (mermaidLines) out.push(`<pre><code>${mermaidLines.join('\n')}</code></pre>`); // 未闭合：退回代码块
-  if (inCode && codeLines.length) out.push(`<pre><code>${codeLines.join('\n')}</code></pre>`);
+  if (inCode && codeRawLines.length) out.push(mdCodeboxHtml(codeLang, codeRawLines.join('\n')));
   flushParagraph();
   closeList();
   return out.join('');
@@ -376,7 +394,7 @@ function cotSourceMeta(tool) {
 }
 
 function createCotTimeline(listEl, options) {
-  const { node, isFirstBatch, nearBottom, toBottom, scheduleStreamUi, isTerminalRunning, isHeadlessRunning, headlessElapsed, scrollEl, hideSeed, hideBranch } = options;
+  const { node, isFirstBatch, nearBottom, toBottom, scheduleStreamUi, isTerminalRunning, isHeadlessRunning, headlessElapsed, scrollEl, hideSeed, hideBranch, onResend } = options;
   const source = cotSourceMeta(node.tool);
   const uid = `cot-${Math.random().toString(36).slice(2, 9)}`;
   const steps = [];
@@ -465,12 +483,6 @@ function createCotTimeline(listEl, options) {
     if (!firstTs) firstTs = value;
     lastTs = value;
   };
-  const statusMeta = (status) => ({
-    active: ['进行中：', '●', 'is-active'],
-    error: ['出错：', '✗', 'is-error'],
-    done: ['已完成：', '✓', 'is-done'],
-    pending: ['待处理：', '○', 'is-pending'],
-  }[status] || ['已完成：', '✓', 'is-done']);
 
   const workingState = (active) => {
     if (gone) return { cls: 'is-done', label: '会话文件已不存在', time: '' };
@@ -488,32 +500,34 @@ function createCotTimeline(listEl, options) {
     return { cls: 'is-done', label: '', time: '' };
   };
 
-  /* ChatGPT 风对话流：消息成气泡/正文；连续工具步骤在执行中逐条显示，整段结束后收成一行摘要 */
+  /* ChatGPT 风对话流：消息成气泡/正文；连续工具步骤聚成灰行组（执行中逐条展开，结束收成摘要行）。
+     v2 降噪：过程一律中性灰行 + 左侧细线；颜色只留「运行中(主题色)/成功(绿)/失败(红)」。 */
 
-  // 把 steps 切分成块：连续的 tool 步骤聚成一组（组内有活跃步骤 = 正在执行，保持展开）
-  const buildBlocks = () => {
+  // 把一段 steps 下标切分成块：command/message 独占一块；thinking、tool 各自聚组
+  const buildBlocksFor = (indices) => {
     const blocks = [];
-    for (let i = 0; i < steps.length; i++) {
+    for (const i of indices) {
       const s = steps[i];
       if (s.phase === 'command') { blocks.push({ type: 'command', step: s }); continue; }
       if (s.phase === 'message') { blocks.push({ type: 'message', step: s }); continue; }
-      const block = blocks.length && blocks[blocks.length - 1].type === 'tools'
-        ? blocks[blocks.length - 1] : { type: 'tools', items: [] };
-      if (!blocks.includes(block)) blocks.push(block);
-      block.items.push({ step: s, i });
+      const type = s.phase === 'thinking' ? 'thinking' : 'tools';
+      const last = blocks[blocks.length - 1];
+      if (last && last.type === type) last.items.push({ step: s, i });
+      else blocks.push({ type, items: [{ step: s, i }] });
     }
     return blocks;
   };
 
   const toolLineHtml = (step, i) => {
-    const [srText, statusIcon, statusClass] = statusMeta(step.status);
     const expanded = openDetails.has(i);
-    return `<li class="chat-tool ${statusClass}${step.fresh ? ' is-fresh' : ''}" style="--i:${Math.min(i, 30)}" ${step.status === 'active' ? 'aria-current="step"' : ''}>
+    const right = step.status === 'active'
+      ? `<span class="chat-tool-spin" aria-hidden="true"></span><span class="chat-tool-time">运行中</span>`
+      : `<span class="chat-tool-mark ${step.status === 'error' ? 'bad' : 'ok'}" aria-hidden="true">${step.status === 'error' ? '✗' : '✓'}</span>${step.count ? `<span class="chat-tool-time">${escapeHtml(step.count)}</span>` : ''}`;
+    return `<li class="chat-tool ${step.status === 'active' ? 'is-active' : step.status === 'error' ? 'is-error' : ''}${step.fresh ? ' is-fresh' : ''}" ${step.status === 'active' ? 'aria-current="step"' : ''}>
       <button type="button" class="chat-tool-row" data-step-toggle="${i}" aria-expanded="${expanded}" aria-controls="${uid}-detail-${i}">
-        <span class="chat-tool-icon" aria-hidden="true">${escapeHtml(step.icon)}</span>
-        <span class="chat-tool-label">${escapeHtml(step.label)}</span>
+        <span class="chat-tool-label kind-${step.infoKind || 'other'}">${escapeHtml(step.label)}</span>
         ${step.query ? `<span class="chat-tool-query" title="${escapeHtml(step.query)}">${escapeHtml(step.query)}</span>` : ''}
-        <span class="chat-tool-status" aria-hidden="true">${statusIcon}</span>
+        <span class="chat-tool-right">${right}</span>
         <span class="cot-chevron" aria-hidden="true">›</span>
       </button>
       <div class="cot-detail" id="${uid}-detail-${i}" data-cot-detail="${i}" ${expanded ? '' : 'hidden'}>
@@ -533,18 +547,43 @@ function createCotTimeline(listEl, options) {
     const firstRun = items[0]?.step?.startTs;
     const lastEnd = items.map(({ step }) => step.endTs).filter(Boolean).pop();
     const spanMs = firstRun && lastEnd ? Math.max(0, Date.parse(lastEnd) - Date.parse(firstRun)) : 0;
-    const label = errCount ? `执行了 ${items.length} 步工具调用（${errCount} 步出错）` : `执行了 ${items.length} 步工具调用`;
+    const label = errCount ? `${items.length} 步工具调用（${errCount} 步出错）` : `${items.length} 步工具调用`;
     const open = openDetails.has('g' + items[0].i);
     return `<li class="chat-toolgroup is-folded">
       <button type="button" class="chat-toolgroup-row" data-group-toggle="g${items[0].i}" aria-expanded="${open}" aria-controls="${uid}-group-${items[0].i}">
-        <span class="chat-toolgroup-icon" aria-hidden="true">🔧</span>
         <span class="chat-toolgroup-label">${escapeHtml(label)}</span>
         ${spanMs > 0 ? `<span class="chat-toolgroup-time">${escapeHtml(cotDuration(spanMs))}</span>` : ''}
         <span class="cot-chevron" aria-hidden="true">›</span>
       </button>
-      <div class="chat-toolgroup-detail" id="${uid}-group-${items[0].i}" ${open ? '' : 'hidden'}>
+      <div class="chat-toolgroup-detail" data-detail-for="g${items[0].i}" id="${uid}-group-${items[0].i}" ${open ? '' : 'hidden'}>
         <ul class="chat-tools">${items.map(({ step, i }) => toolLineHtml(step, i)).join('')}</ul>
       </div>
+    </li>`;
+  };
+
+  // 思考块：流式时「✳ 思考中…」+ 展开正文；结束收成一行（点开看全文）
+  const thinkingBlockHtml = (block) => {
+    const items = block.items;
+    const running = items.some(({ step }) => step.status === 'active');
+    const text = items.map(({ step }) => String(step.text || '').trim()).filter(Boolean).join('\n\n');
+    const t0 = items[0]?.step?.startTs;
+    const t1 = items.map(({ step }) => step.endTs).filter(Boolean).pop();
+    const dur = !running && t0 && t1 ? cotDuration(Math.max(0, Date.parse(t1) - Date.parse(t0))) : '';
+    if (running) {
+      return `<li class="chat-toolgroup think-group is-running">
+        <div class="think-head"><span class="think-mark" aria-hidden="true">✳</span><span class="cot-shimmer">思考中…</span></div>
+        ${text ? `<div class="think-body">${escapeHtml(clipText(text, 4000))}</div>` : ''}
+      </li>`;
+    }
+    const key = `t${items[0].i}`;
+    const open = openDetails.has(key);
+    return `<li class="chat-toolgroup think-group is-folded">
+      <button type="button" class="chat-toolgroup-row" data-group-toggle="${key}" aria-expanded="${open}">
+        <span class="think-mark" aria-hidden="true">✳</span>
+        <span class="chat-toolgroup-label">思考${dur ? ` · ${escapeHtml(dur)}` : ''}</span>
+        <span class="cot-chevron" aria-hidden="true">›</span>
+      </button>
+      ${text ? `<div class="think-body" data-detail-for="${key}" ${open ? '' : 'hidden'}>${escapeHtml(clipText(text, 4000))}</div>` : ''}
     </li>`;
   };
 
@@ -564,6 +603,8 @@ function createCotTimeline(listEl, options) {
       if (!evt) continue;
       if (evt.kind === 'user' || evt.kind === 'assistant') {
         local.push(messageStep(evt));
+      } else if (evt.kind === 'thinking') {
+        local.push(thinkingStep(evt));
       } else if (evt.kind === 'tool_call') {
         const step = toolStep(evt);
         if (step.callId) localByCall.set(step.callId, step);
@@ -612,6 +653,137 @@ function createCotTimeline(listEl, options) {
     render();
   };
 
+  /* ---------- 回合（turn）切分与折叠 ----------
+     一个回合 = 一条用户消息起到下一条用户消息前；回合结束后过程块（工具/思考）
+     自动收进「执行过程」折叠条，只留正文 —— 用户可点开回看。 */
+  const openTurns = new Set(); // 手动展开过的回合（按 startIdx 记）
+  // 最近一次无头执行的结局（由 pane 在轮询到执行结束时注入）：{exitCode, canceled, timedOut, stderrTail}
+  let lastOutcome = null;
+  let outcomeTurnStart = null;
+  const buildTurns = () => {
+    const turns = [];
+    let cur = null;
+    const ensure = () => {
+      if (!cur) { cur = { startIdx: 0, items: [] }; turns.push(cur); }
+      return cur;
+    };
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      if (s.phase === 'message' && s.kind === 'user') {
+        cur = { startIdx: i, items: [i] };
+        turns.push(cur);
+        continue;
+      }
+      ensure().items.push(i);
+    }
+    return turns;
+  };
+  const turnHasAnswer = (turn) => {
+    for (let k = turn.items.length - 1; k >= 0; k--) {
+      const s = steps[turn.items[k]];
+      if (s.phase === 'message') return s.kind === 'assistant';
+    }
+    return false;
+  };
+  const turnDuration = (turn) => {
+    let t0 = null, t1 = null;
+    for (const i of turn.items) {
+      const s = steps[i];
+      if (s.startTs && (!t0 || s.startTs < t0)) t0 = s.startTs;
+      const e = s.endTs || s.startTs;
+      if (e && (!t1 || e > t1)) t1 = e;
+    }
+    return t0 && t1 && Date.parse(t1) > Date.parse(t0) ? cotDuration(Date.parse(t1) - Date.parse(t0)) : '';
+  };
+  const turnProcSummary = (turn) => {
+    const c = { think: 0, read: 0, edit: 0, cmd: 0, other: 0 };
+    for (const i of turn.items) {
+      const s = steps[i];
+      if (s.phase === 'thinking') c.think += 1;
+      else if (s.phase === 'tool') {
+        const k = s.infoKind || 'other';
+        c[k === 'read' || k === 'edit' || k === 'cmd' ? k : 'other'] += 1;
+      }
+    }
+    const segs = [];
+    if (c.think) segs.push(`思考 ${c.think} 段`);
+    if (c.read) segs.push(`读取 ${c.read} 项`);
+    if (c.edit) segs.push(`编辑 ${c.edit} 个文件`);
+    if (c.cmd) segs.push(`运行 ${c.cmd} 条命令`);
+    if (c.other) segs.push(`调用 ${c.other} 次工具`);
+    return segs.join(' · ');
+  };
+  const procBarHtml = (turn) => {
+    const open = openTurns.has(turn.startIdx);
+    const segs = turnProcSummary(turn);
+    const dur = turnDuration(turn);
+    return `<button type="button" class="turn-process${open ? ' open' : ''}" data-turn-toggle="${turn.startIdx}" aria-expanded="${open}">
+      <span class="chev" aria-hidden="true">▸</span><b>执行过程</b>${segs ? `<span class="turn-segs">· ${escapeHtml(segs)}</span>` : ''}
+      ${dur ? `<span class="turn-dur">${escapeHtml(dur)}</span>` : ''}
+    </button>`;
+  };
+  const outcomeRowHtml = () => {
+    if (!lastOutcome) return '';
+    const o = lastOutcome;
+    const tail = o.stderrTail ? ` · ${escapeHtml(truncate(String(o.stderrTail).trim(), 120))}` : '';
+    if (o.canceled) return `<div class="run-outcome canceled">已取消${tail}</div>`;
+    if (o.timedOut) return `<div class="run-outcome error">✗ 执行超时（10 分钟），已终止</div>`;
+    if (o.exitCode !== 0 && o.exitCode != null) return `<div class="run-outcome error">✗ 执行失败（exit ${o.exitCode}）${tail}</div>`;
+    return `<div class="run-outcome ok">✓ 已完成</div>`;
+  };
+  const renderBlockHtml = (block) => {
+    if (block.type === 'command') {
+      const step = block.step;
+      return `<div class="chat-cmdrow" title="TUI 指令：在终端里执行（效果见终端视图）">
+        <span class="chat-cmdicon">⌘</span><span class="chat-cmdtext">${escapeHtml(step.text || '')}</span>
+      </div>`;
+    }
+    if (block.type === 'message') {
+      const step = block.step;
+      const isUser = step.kind === 'user';
+      const idx = steps.indexOf(step);
+      const canCopy = copyTexts.has(idx);
+      const canBranch = canCopy && !isUser && !hideBranch;
+      return `<div class="chat-msg ${isUser ? 'is-user' : 'is-assistant'}">
+        <div class="chat-msg-body">
+          <div class="chat-bubble">${step.bodyHtml || `<div class="sev-text">${renderMessageHtml(step.text || '', isUser ? 3000 : 6000, { allowMermaid: !isUser })}</div>`}</div>
+          ${canCopy ? `<div class="chat-actions">
+            <button type="button" class="chat-copy" data-copy="${idx}" title="复制整段内容">${icon('copy', 12)}</button>
+            ${isUser && onResend ? `<button type="button" class="chat-copy" data-resend="${idx}" title="把这条消息放回输入框重新编辑">${icon('history', 12)}</button>` : ''}
+            ${canBranch ? `<button type="button" class="chat-copy chat-branch" data-branch="${idx}" title="创建分支：复制当前会话（保留完整历史），原会话不变">${icon('git', 12)}</button>` : ''}
+          </div>` : ''}
+        </div>
+      </div>`;
+    }
+    if (block.type === 'thinking') return thinkingBlockHtml(block);
+    return toolsBlockHtml(block);
+  };
+  const renderTurnHtml = (turn, isLast, work) => {
+    const hasProcess = turn.items.some((i) => steps[i].phase === 'tool' || steps[i].phase === 'thinking');
+    // 折叠规则：有过程块、未被手动展开，且（不是最后一个回合，或最后一个回合已执行完且有正文）
+    const collapsed = hasProcess && !openTurns.has(turn.startIdx)
+      && (!isLast || (work.cls === 'is-done' && turnHasAnswer(turn)));
+    const chunks = [];
+    if (collapsed) {
+      let barPlaced = false;
+      for (const block of buildBlocksFor(turn.items)) {
+        if (block.type === 'tools' || block.type === 'thinking') {
+          if (!barPlaced) { chunks.push(procBarHtml(turn)); barPlaced = true; }
+          continue;
+        }
+        chunks.push(renderBlockHtml(block));
+      }
+      if (!barPlaced) chunks.push(procBarHtml(turn));
+      const dur = turnDuration(turn);
+      if (dur) chunks.push(`<div class="turn-meta">用时 ${escapeHtml(dur)}</div>`);
+      if (outcomeTurnStart === turn.startIdx) chunks.push(outcomeRowHtml());
+      return chunks.join('');
+    }
+    for (const block of buildBlocksFor(turn.items)) chunks.push(renderBlockHtml(block));
+    if (outcomeTurnStart === turn.startIdx && isLast) chunks.push(outcomeRowHtml());
+    return chunks.join('');
+  };
+
   const render = () => {
     const stick = nearBottom();
     const paneEl = listEl.closest('.session-pane');
@@ -658,36 +830,11 @@ function createCotTimeline(listEl, options) {
       finalize();
     }
 
-    // 消息直出气泡；连续工具步骤聚组：执行中展开、结束后收成一行摘要
-    const bodyHtml = buildBlocks().map((block) => {
-      if (block.type === 'command') {
-        // TUI 命令标记行：斜杠命令不是消息，居中一条小指令签
-        const step = block.step;
-        return `<div class="chat-cmdrow" title="TUI 指令：在终端里执行（效果见终端视图）">
-          <span class="chat-cmdicon">⌘</span><span class="chat-cmdtext">${escapeHtml(step.text || '')}</span>
-        </div>`;
-      }
-      if (block.type === 'message') {
-        const step = block.step;
-        const isUser = step.kind === 'user';
-        const idx = steps.indexOf(step);
-        const canCopy = copyTexts.has(idx);
-        const canBranch = canCopy && !isUser && !hideBranch; // 只在一整段回答的末尾提供「创建分支」
-        // 靠左右对齐区分说话人，不需要头像图标；整段回答的末尾才放复制/分支组件
-        return `<div class="chat-msg ${isUser ? 'is-user' : 'is-assistant'}">
-          <div class="chat-msg-body">
-            <div class="chat-bubble">${step.bodyHtml || `<div class="sev-text">${renderMessageHtml(step.text || '', isUser ? 3000 : 6000, { allowMermaid: !isUser })}</div>`}</div>
-            ${canCopy ? `<div class="chat-actions">
-              <button type="button" class="chat-copy" data-copy="${idx}" title="复制整段内容">${icon('copy', 12)}</button>
-              ${canBranch ? `<button type="button" class="chat-copy chat-branch" data-branch="${idx}" title="创建分支：复制当前会话（保留完整历史），原会话不变">${icon('git', 12)}</button>` : ''}
-            </div>` : ''}
-          </div>
-        </div>`;
-      }
-      return toolsBlockHtml(block);
-    }).join('');
+    const turns = buildTurns();
+    const lastTurnStart = turns.length ? turns[turns.length - 1].startIdx : -1;
+    const bodyHtml = turns.map((turn) => renderTurnHtml(turn, turn.startIdx === lastTurnStart, work)).join('');
     const pendingRow = work.cls === 'is-working' && connected && !active && !gone
-      ? `<li class="chat-tool is-pending"><span class="chat-tool-row"><span class="chat-tool-icon" aria-hidden="true">○</span><span class="cot-pending-label">等待下一步…</span></span></li>`
+      ? `<li class="chat-tool is-pending"><span class="chat-tool-row"><span class="cot-pending-label">等待下一步…</span></span></li>`
       : '';
     const olderBanner = hasOlder
       ? `<div class="cot-older">${steps.length >= STEPS_CAP
@@ -697,7 +844,7 @@ function createCotTimeline(listEl, options) {
 
     listEl.innerHTML = `<div class="chat-stream source-${source.key}">
       ${olderBanner}
-      <div class="chat-thread">${bodyHtml}</div>
+      <div class="chat-thread">${bodyHtml}${pendingRow}</div>
       <ol class="chat-tools" aria-label="AI 工作步骤" hidden></ol>
       <div class="chat-working ${work.cls}" role="status" aria-live="polite">
         <span class="chat-spark" aria-hidden="true">${work.cls === 'is-done' ? '' : '✦'}</span>
@@ -722,6 +869,7 @@ function createCotTimeline(listEl, options) {
     for (const s of steps) {
       if (s.status === 'active') {
         s.status = 'done';
+        s.endTs = s.endTs || lastTs || cotNormalizeTs();
         s.count = s.count === '等待结果' ? '已切换' : s.count;
       }
     }
@@ -775,17 +923,19 @@ function createCotTimeline(listEl, options) {
     const info = extractToolInfo(evt.toolName, evt.args);
     const meta = COT_KIND_META[info.kind] || COT_KIND_META.other;
     const query = info.command || info.query || info.path || cotFirstLine(String(evt.args ?? ''), 130);
-    const label = info.kind === 'other'
-      ? `${meta.label} ${evt.toolName || '工具'}`
-      : `${meta.label}${info.kind === 'edit' && info.path ? ` · ${truncate(info.path, 56)}` : ''}`;
+    // v2 降噪：标签不带 emoji；命令用 `$ cmd` 前缀（等宽字体靠 kind-cmd class）
+    const label = info.kind === 'edit' ? `编辑 · ${truncate(info.path || '(未知文件)', 56)}`
+      : info.kind === 'cmd' ? `$ ${truncate(info.command || '', 110)}`
+      : info.kind === 'read' ? `读取 · ${truncate(info.path || info.query || '', 110)}`
+      : `${evt.toolName || meta.label}`;
     const diff = info.kind === 'edit' && (info.del?.length || info.add?.length) ? diffHtml(info.del, info.add) : '';
     const argsText = clipText(String(evt.args ?? ''), 1800);
     return {
       phase: 'tool',
       status: 'active',
-      icon: meta.icon,
+      infoKind: info.kind || 'other',
       label,
-      query,
+      query: info.kind === 'cmd' ? '' : query,
       count: '等待结果',
       startTs: cotNormalizeTs(evt.ts),
       endTs: null,
@@ -795,6 +945,18 @@ function createCotTimeline(listEl, options) {
       bodyHtml: `<div class="cot-detail-label">调用参数</div><pre class="cot-output">${escapeHtml(argsText || '（无参数）')}</pre>${diff}`,
     };
   };
+
+  const thinkingStep = (evt) => ({
+    phase: 'thinking',
+    status: 'active',
+    kind: 'thinking',
+    text: String(evt.text ?? ''),
+    count: '',
+    startTs: cotNormalizeTs(evt.ts),
+    endTs: null,
+    sourceDetail: '思考',
+    bodyHtml: '',
+  });
 
   const resultDetailHtml = (evt) => {
     const outcome = clipText(String(evt.outcome ?? ''), 2800);
@@ -825,10 +987,51 @@ function createCotTimeline(listEl, options) {
   listEl.addEventListener('click', (e) => {
     const olderBtn = e.target.closest('[data-older-load]');
     if (olderBtn) { loadOlder(); return; }
+    const codeCopyBtn = e.target.closest('[data-codecopy]');
+    if (codeCopyBtn) {
+      const box = codeCopyBtn.closest('.chat-codebox');
+      const text = box?.querySelector('code')?.textContent || '';
+      if (text) {
+        navigator.clipboard.writeText(text).then(() => {
+          codeCopyBtn.textContent = '已复制';
+          setTimeout(() => { codeCopyBtn.textContent = '复制'; }, 1200);
+        }).catch(() => { /* 剪贴板失败静默 */ });
+      }
+      return;
+    }
+    const resendBtn = e.target.closest('[data-resend]');
+    if (resendBtn) {
+      const idx = Number(resendBtn.dataset.resend);
+      const text = steps[idx]?.text || '';
+      if (text && onResend) onResend(text);
+      return;
+    }
+    const turnRow = e.target.closest('[data-turn-toggle]');
+    if (turnRow) {
+      const key = Number(turnRow.dataset.turnToggle);
+      if (openTurns.has(key)) openTurns.delete(key);
+      else {
+        openTurns.add(key);
+        // 展开回合时把组内明细一并展开（少点一层）
+        const turn = buildTurns().find((t) => t.startIdx === key);
+        if (turn) {
+          let prevPhase = '';
+          for (const k of turn.items) {
+            const s = steps[k];
+            if (s.phase === 'tool' && prevPhase !== 'tool') openDetails.add('g' + k);
+            if (s.phase === 'thinking' && prevPhase !== 'thinking') openDetails.add('t' + k);
+            prevPhase = s.phase;
+          }
+        }
+      }
+      render();
+      scheduleStreamUi();
+      return;
+    }
     const groupRow = e.target.closest('[data-group-toggle]');
     if (groupRow) {
       const key = groupRow.dataset.groupToggle;
-      const detail = listEl.querySelector(`[id$="-group-${key.slice(1)}"]`);
+      const detail = listEl.querySelector(`[data-detail-for="${CSS.escape(key)}"]`);
       if (!detail) return;
       const willOpen = detail.hidden;
       detail.hidden = !willOpen;
@@ -875,8 +1078,17 @@ function createCotTimeline(listEl, options) {
         return;
       }
       if (evt.kind === 'user' || evt.kind === 'assistant') pushStep(messageStep(evt), evt);
+      else if (evt.kind === 'thinking') pushStep(thinkingStep(evt), evt);
       else if (evt.kind === 'tool_call') pushStep(toolStep(evt), evt);
       else if (evt.kind === 'tool_result') applyResult(evt);
+    },
+    /* pane 轮询到无头执行结束时注入结局：折叠最后的回合并显示 ✓/✗/已取消 行 */
+    setHeadlessOutcome(outcome) {
+      const turns = buildTurns();
+      const last = turns[turns.length - 1];
+      outcomeTurnStart = last ? last.startIdx : null;
+      lastOutcome = outcome || null;
+      render();
     },
     refresh() { render(); },
     finishBatch() { render(); },

@@ -37,6 +37,12 @@ function parseCodexLine(rec, evts) {
     }
     return;
   }
+  if (p.type === 'reasoning') {
+    // Codex rollout 的思考摘要（summary 是 [{type:'summary_text',text}]，content 是 reasoning 明细）
+    const text = contentText(p.summary) || contentText(p.content);
+    if (text) evts.push({ kind: 'thinking', text, ts });
+    return;
+  }
   if (p.type === 'function_call' || p.type === 'custom_tool_call') {
     evts.push({
       kind: 'tool_call', toolName: p.name || p.namespace || 'tool',
@@ -69,6 +75,9 @@ function parsePiLine(rec, evts) {
     for (const part of Array.isArray(m.content) ? m.content : []) {
       if (part.type === 'text' && part.text) {
         evts.push({ kind: 'assistant', role: 'assistant', text: part.text, ts });
+      } else if (part.type === 'thinking' && part.thinking) {
+        // pi/OMP 的思考块（ThinkingContent）：整段落盘，直接透传
+        evts.push({ kind: 'thinking', text: part.thinking, ts });
       } else if (part.type === 'toolCall') {
         evts.push({ kind: 'tool_call', toolName: part.name || 'tool', args: part.arguments, callId: part.id || null, ts });
       }
@@ -105,6 +114,9 @@ function parseClaudeLine(rec, evts) {
     if (c.type === 'text' && c.text) {
       if (rec.type === 'user' && !claudeInjected(c.text)) evts.push({ kind: 'user', role: 'user', text: c.text, ts });
       else if (rec.type === 'assistant') evts.push({ kind: 'assistant', role: 'assistant', text: c.text, ts });
+    } else if (c.type === 'thinking' && c.thinking) {
+      // Claude 的思考块（interleaved thinking 也在这个 type 里）
+      evts.push({ kind: 'thinking', text: c.thinking, ts });
     } else if (c.type === 'tool_use' && c.name) {
       evts.push({ kind: 'tool_call', toolName: c.name, args: c.input ?? '', callId: c.id || null, ts });
     } else if (c.type === 'tool_result') {

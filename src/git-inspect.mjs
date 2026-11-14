@@ -45,10 +45,17 @@ export function inspectChanges(cwd, filePath) {
 
   const branch = gitRun(['rev-parse', '--abbrev-ref', 'HEAD'], base).out.trim();
   const status = gitRun(['status', '--porcelain'], base).out.split('\n').filter(Boolean);
+  // numstat：每文件 +/- 行数（未跟踪文件不在 diff 里，前端显示状态标记即可）
+  const numstat = new Map();
+  for (const line of gitRun(['diff', '--numstat', '--no-color'], base).out.split('\n')) {
+    const m = /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(line.trim());
+    if (m) numstat.set(m[3].replace(/^.* -> /, ''), { added: m[1] === '-' ? null : Number(m[1]), deleted: m[2] === '-' ? null : Number(m[2]) });
+  }
   const files = status.map((line) => {
     const code = line.slice(0, 2).trim() || line.slice(0, 2);
     const file = line.slice(3).trim().replace(/^.* -> /, '');
-    return { path: file, code, label: statusLabel(code) };
+    const ns = numstat.get(file) || null;
+    return { path: file, code, label: statusLabel(code), added: ns?.added ?? null, deleted: ns?.deleted ?? null };
   }).slice(0, LIST_MAX);
 
   if (filePath) {

@@ -524,23 +524,83 @@ function spMountSide(body, sideNode) {
 }
 
 /* ---------- 改动 ---------- */
+/* 扩展名 → highlight.js 语言名（slim bundle 内置常用语言集） */
+function spHljsLangOf(path) {
+  const ext = String(path || '').split('.').pop().toLowerCase();
+  const map = {
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+    ts: 'typescript', tsx: 'typescript',
+    py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java', kt: 'kotlin',
+    c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp', cs: 'csharp',
+    php: 'php', swift: 'swift',
+    css: 'css', scss: 'scss', less: 'less',
+    html: 'xml', xml: 'xml', svg: 'xml', vue: 'xml',
+    json: 'json', yml: 'yaml', yaml: 'yaml', toml: 'ini', ini: 'ini', env: 'ini',
+    md: 'markdown', markdown: 'markdown',
+    sh: 'bash', bash: 'bash', zsh: 'bash', ps1: 'powershell',
+    sql: 'sql', lua: 'lua', sql3: 'sql',
+    diff: 'diff', patch: 'diff',
+  };
+  return map[ext] || null;
+}
+
+/* 已知二进制扩展名：文件列表里灰显并标注类型，点开提示而不是硬预览 */
+const SP_BINARY_KINDS = {
+  lnk: '快捷方式', exe: '程序', dll: '动态库', msi: '安装包',
+  mp4: '视频', mov: '视频', avi: '视频', mkv: '视频', webm: '视频',
+  mp3: '音频', wav: '音频', flac: '音频', m4a: '音频',
+  png: '图片', jpg: '图片', jpeg: '图片', gif: '图片', webp: '图片', bmp: '图片', ico: '图标',
+  pdf: 'PDF', doc: 'Word', docx: 'Word', xls: 'Excel', xlsx: 'Excel',
+  ppt: 'PPT', pptx: 'PPT', zip: '压缩包', rar: '压缩包', '7z': '压缩包', gz: '压缩包', tgz: '压缩包',
+  db: '数据库', sqlite: '数据库', ttf: '字体', otf: '字体', woff: '字体', woff2: '字体',
+  psd: 'PSD', bin: '二进制', dat: '二进制', so: '动态库', dylib: '动态库',
+};
+
+/* diff2html 渲染单文件 diff。unified diff 文本 → GitHub 风格双栏视图。
+   未跟踪新文件的 diff 没有 diff --git 头，包一层合法头让 diff2html 能解析。 */
+function spDrawDiff(container, diffText, filePath, { sideBySide = false } = {}) {
+  let text = String(diffText || '');
+  if (text && !text.includes('diff --git')) {
+    text = `diff --git a/${filePath} b/${filePath}\n--- a/${filePath}\n+++ b/${filePath}\n${text}`;
+  }
+  if (!text.trim()) {
+    container.innerHTML = '<div class="sp-empty">这个文件没有内容差异</div>';
+    return;
+  }
+  container.innerHTML = '';
+  try {
+    // UMD 直接把 Diff2HtmlUI 挂到 window（无 diff2html 命名空间）
+    new Diff2HtmlUI(container, text, {
+      drawFileList: false,
+      outputFormat: sideBySide ? 'side-by-side' : 'line-by-line',
+      matching: 'words',
+      highlight: true,
+      colorScheme: 'light',
+      synchronisedScroll: sideBySide,
+    }).draw();
+  } catch (err) {
+    // 解析失败退回原始文本渲染，保证信息不丢
+    container.innerHTML = `<pre class="sp-diff">${String(text).split('\n').slice(0, 2000).map((l) => {
+      const cls = l.startsWith('+++') || l.startsWith('---') ? 'diff-head'
+        : l.startsWith('+') ? 'diff-add'
+          : l.startsWith('-') ? 'diff-del'
+            : l.startsWith('@@') ? 'diff-hunk' : '';
+      return `<span class="dl-line ${cls}">${escapeHtml(l) || ' '}</span>`;
+    }).join('')}</pre>`;
+  }
+}
+
 async function spRenderDiff(body, node) {
   if (spState.file) {
     const data = await api(`${spApiBase(node)}/changes?path=${encodeURIComponent(spState.file)}`);
-    const lines = String(data.diff || '').split('\n').slice(0, 2000);
     body.innerHTML = `
       <div class="sp-file-head">
         <button type="button" class="sp-link" data-sp-back>← 改动列表</button>
         <span class="sp-file-name" title="${escapeHtml(data.file)}">${escapeHtml(data.file)}</span>
       </div>
       <div class="sp-meta">+${data.added || 0} / -${data.deleted || 0}${data.truncated ? ' · 已截断' : ''}</div>
-      <pre class="sp-diff">${lines.map((l) => {
-        const cls = l.startsWith('+++') || l.startsWith('---') ? 'diff-head'
-          : l.startsWith('+') ? 'diff-add'
-            : l.startsWith('-') ? 'diff-del'
-              : l.startsWith('@@') ? 'diff-hunk' : '';
-        return `<span class="dl-line ${cls}">${escapeHtml(l) || ' '}</span>`;
-      }).join('')}</pre>`;
+      <div class="sp-diffbox" data-sp-diffbox></div>`;
+    spDrawDiff(body.querySelector('[data-sp-diffbox]'), data.diff, data.file || spState.file);
     body.querySelector('[data-sp-back]')?.addEventListener('click', () => {
       spState.file = null;
       spLastKey = '';
@@ -567,6 +627,7 @@ async function spRenderDiff(body, node) {
       <button type="button" class="sp-file" data-file="${escapeHtml(f.path)}" title="${escapeHtml(f.path)}">
         <span class="sp-file-status s-${kind}">${escapeHtml(f.label)}</span>
         <span class="sp-file-path">${escapeHtml(f.path)}</span>
+        ${f.added != null || f.deleted != null ? `<span class="sp-diffstat"><i>+${f.added ?? 0}</i><em>-${f.deleted ?? 0}</em></span>` : ''}
       </button>`;
     }).join('')}</div>` : '<div class="sp-empty">没有未提交的改动</div>'}
     ${data.stat ? `<pre class="sp-stat">${escapeHtml(data.stat)}</pre>` : ''}`;
@@ -583,15 +644,54 @@ async function spRenderDiff(body, node) {
 async function spRenderFiles(body, node) {
   if (spState.file) {
     const data = await api(`${spApiBase(node)}/files?read=1&path=${encodeURIComponent(spState.file)}`);
-    const text = data.binary
-      ? '（二进制文件，无法预览）'
-      : data.truncated ? `（文件 ${(data.size / 1024).toFixed(0)}KB，超出预览上限）` : String(data.text || '');
-    body.innerHTML = `
-      <div class="sp-file-head">
-        <button type="button" class="sp-link" data-sp-back>← ${escapeHtml(spState.dir || '根目录')}</button>
-        <span class="sp-file-name" title="${escapeHtml(data.path)}">${escapeHtml(data.path.split('/').pop())}</span>
-      </div>
-      <pre class="sp-code">${escapeHtml(text)}</pre>`;
+    if (data.binary) {
+      // 常见二进制类型给一句人话说明，避免用户以为是坏了
+      const ext = (data.path || '').split('.').pop().toLowerCase();
+      const kindMap = {
+        lnk: 'Windows 快捷方式', exe: 'Windows 可执行程序', dll: 'Windows 动态库', msi: 'Windows 安装包',
+        mp4: '视频', mov: '视频', avi: '视频', mkv: '视频', webm: '视频',
+        mp3: '音频', wav: '音频', flac: '音频', m4a: '音频',
+        png: '图片', jpg: '图片', jpeg: '图片', gif: '图片', webp: '图片', bmp: '图片', ico: '图标',
+        pdf: 'PDF 文档', doc: 'Word 文档', docx: 'Word 文档', xls: 'Excel 表格', xlsx: 'Excel 表格',
+        ppt: '演示文稿', pptx: '演示文稿', zip: '压缩包', rar: '压缩包', '7z': '压缩包', gz: '压缩包', tgz: '压缩包',
+        db: '数据库文件', sqlite: '数据库文件', ttf: '字体', otf: '字体', woff: '字体', woff2: '字体',
+        psd: 'Photoshop 文件', bin: '二进制数据', dat: '二进制数据', so: 'Linux 动态库', dylib: 'macOS 动态库',
+      };
+      const kind = kindMap[ext] || '二进制文件';
+      body.innerHTML = `
+        <div class="sp-file-head">
+          <button type="button" class="sp-link" data-sp-back>← ${escapeHtml(spState.dir || '根目录')}</button>
+          <span class="sp-file-name" title="${escapeHtml(data.path)}">${escapeHtml(data.path.split('/').pop())}</span>
+        </div>
+        <div class="sp-empty">
+          ${icon('file', 22)}<br />
+          这是${escapeHtml(kind)}，不是文本文件，没有可预览的代码内容。<br />
+          <span class="sp-dim">${(data.size / 1024).toFixed(1)}KB · 想看代码请打开 .js / .py / .css / .md 等文本文件</span>
+        </div>`;
+    } else if (data.truncated) {
+      body.innerHTML = `
+        <div class="sp-file-head">
+          <button type="button" class="sp-link" data-sp-back>← ${escapeHtml(spState.dir || '根目录')}</button>
+          <span class="sp-file-name" title="${escapeHtml(data.path)}">${escapeHtml(data.path.split('/').pop())}</span>
+        </div>
+        <pre class="sp-code">${escapeHtml(String(data.text || ''))}</pre>
+        <div class="sp-dim sp-meta">（文件 ${(data.size / 1024).toFixed(0)}KB，超出预览上限，以上为前半部分）</div>`;
+    } else {
+      const text = String(data.text || '');
+      const lang = spHljsLangOf(data.path || spState.file);
+      let html = null;
+      // highlight.js 由 diff2html-ui-slim 内置；有语言就上色，失败退回纯文本
+      if (lang && typeof window.hljs !== 'undefined') {
+        try { html = window.hljs.highlight(text, { language: lang }).value; } catch { html = null; }
+      }
+      body.innerHTML = `
+        <div class="sp-file-head">
+          <button type="button" class="sp-link" data-sp-back>← ${escapeHtml(spState.dir || '根目录')}</button>
+          <span class="sp-file-name" title="${escapeHtml(data.path)}">${escapeHtml(data.path.split('/').pop())}</span>
+          ${lang ? `<span class="sp-dim" style="flex:none">${lang}</span>` : ''}
+        </div>
+        <pre class="sp-code sp-code-hl">${html ? `<code class="hljs">${html}</code>` : escapeHtml(text)}</pre>`;
+    }
     body.querySelector('[data-sp-back]')?.addEventListener('click', () => {
       spState.file = null;
       spLastKey = '';
@@ -606,12 +706,17 @@ async function spRenderFiles(body, node) {
     .concat(parts.map((p, i) => `<span class="sp-sep">/</span><button type="button" class="sp-crumb" data-go="${escapeHtml(parts.slice(0, i + 1).join('/'))}">${escapeHtml(p)}</button>`));
   body.innerHTML = `
     <div class="sp-crumbs">${crumbs.join('')}</div>
-    <div class="sp-list">${(data.entries || []).map((e) => `
-      <button type="button" class="sp-file" data-entry="${escapeHtml(e.name)}" data-type="${e.type}">
-        <span class="sp-item-icon">${e.type === 'dir' ? icon('folder', 14) : icon('file', 14)}</span>
+    <div class="sp-list">${(data.entries || []).map((e) => {
+      const size = e.type === 'file' ? (e.size >= 1024 * 1024 ? `${(e.size / 1024 / 1024).toFixed(1)}MB` : e.size >= 1024 ? `${Math.max(1, Math.round(e.size / 1024))}KB` : `${e.size}B`) : '';
+      const kind = e.type === 'file' ? SP_BINARY_KINDS[e.name.split('.').pop().toLowerCase()] : null;
+      return `
+      <button type="button" class="sp-file${kind ? ' is-binary' : ''}" data-entry="${escapeHtml(e.name)}" data-type="${e.type}">
+        <span class="sp-item-icon ${e.type === 'dir' ? 'is-dir' : 'is-file'}">${e.type === 'dir' ? icon('folder', 14) : icon('file', 14)}</span>
         <span class="sp-file-path">${escapeHtml(e.name)}</span>
-        ${e.type === 'file' ? `<span class="sp-dim">${e.size > 1024 ? `${Math.round(e.size / 1024)}KB` : `${e.size}B`}</span>` : ''}
-      </button>`).join('') || '<div class="sp-empty">空目录</div>'}</div>`;
+        ${kind ? `<span class="sp-kind">${kind}</span>` : ''}
+        ${size ? `<span class="sp-dim">${size}</span>` : ''}
+      </button>`;
+    }).join('') || '<div class="sp-empty">空目录</div>'}</div>`;
   body.querySelectorAll('[data-crumb], [data-go]').forEach((btn) => {
     btn.addEventListener('click', () => {
       spState.dir = btn.dataset.go || '';
@@ -648,10 +753,10 @@ async function spRenderContext(body, node) {
       <button type="button" class="btn-ghost small" data-ctx-compact ${ctx ? '' : 'disabled'}>压缩</button>
     </div>
     <div class="sp-ctx-usage">
-      <span>${ctx ? `${fmtTokens(ctx.used)} / ${fmtTokens(ctx.window)} tokens` : '未读到用量'}</span>
-      <b>${pct}%</b>
+      <span>${ctx ? `${fmtTokens(ctx.used)} <span class="sp-dim">/ ${fmtTokens(ctx.window)} tokens</span>` : '未读到用量'}</span>
+      <b class="${pct >= 90 ? 'ctx-danger' : pct >= 70 ? 'ctx-warn' : 'ctx-ok'}">${pct}%</b>
     </div>
-    <div class="sp-ctx-bar"><i style="width:${Math.min(100, pct)}%"></i></div>
+    <div class="sp-ctx-bar ${pct >= 90 ? 'ctx-danger' : pct >= 70 ? 'ctx-warn' : ''}"><i style="width:${Math.min(100, pct)}%"></i></div>
     <div class="sp-seg">
       <button type="button" data-ctx-tab="files" class="${tab === 'files' ? 'active' : ''}">文件 ${files.length}</button>
       <button type="button" data-ctx-tab="other" class="${tab === 'other' ? 'active' : ''}">其他</button>
@@ -688,16 +793,6 @@ async function spRenderContext(body, node) {
 }
 
 /* ---------- Git（项目级完整视图） ---------- */
-function spDiffLines(diff) {
-  return String(diff || '').split('\n').slice(0, 2000).map((l) => {
-    const cls = l.startsWith('+++') || l.startsWith('---') ? 'diff-head'
-      : l.startsWith('+') ? 'diff-add'
-        : l.startsWith('-') ? 'diff-del'
-          : l.startsWith('@@') ? 'diff-hunk' : '';
-    return `<span class="dl-line ${cls}">${escapeHtml(l) || ' '}</span>`;
-  }).join('');
-}
-
 async function spRenderGit(body, node) {
   const q = spState.gitRefresh ? '?refresh=1' : '';
   spState.gitRefresh = false;
@@ -728,7 +823,8 @@ async function spRenderGit(body, node) {
         <span class="sp-file-name" title="${escapeHtml(d.file || '')}">${escapeHtml(d.file || '')}</span>
       </div>
       <div class="sp-meta">+${d.added || 0} / -${d.deleted || 0}${d.truncated ? ' · 已截断' : ''}</div>
-      <pre class="sp-diff">${spDiffLines(d.diff)}</pre>`;
+      <div class="sp-diffbox" data-git-diffbox></div>`;
+    spDrawDiff(body.querySelector('[data-git-diffbox]'), d.diff, d.file || spState.gitFile);
     body.querySelector('[data-git-back]')?.addEventListener('click', () => {
       spState.gitFile = null;
       spLastKey = '';
@@ -756,6 +852,7 @@ async function spRenderGit(body, node) {
       <button type="button" class="sp-file" data-git-file="${escapeHtml(f.path)}" title="${escapeHtml(f.path)}">
         <span class="sp-file-status s-${kind}">${escapeHtml(f.code || '')}</span>
         <span class="sp-file-path">${escapeHtml(f.path)}</span>
+        ${f.added != null || f.deleted != null ? `<span class="sp-diffstat"><i>+${f.added ?? 0}</i><em>-${f.deleted ?? 0}</em></span>` : ''}
       </button>`;
     }).join('')}</div>` : '<div class="sp-empty">工作区干净</div>'}
 
@@ -805,20 +902,14 @@ async function spRenderWorktree(body, node) {
   // 单文件 diff：从这里能直接看 worktree 里改了什么（不只是状态数字）
   if (spState.wtFile) {
     const d = await api(`${base}?path=${encodeURIComponent(spState.wtFile)}`);
-    const lines = String(d.diff || '').split('\n').slice(0, 2000);
     body.innerHTML = `
       <div class="sp-file-head">
         <button type="button" class="sp-link" data-wt-back>← worktree</button>
         <span class="sp-file-name" title="${escapeHtml(d.file || '')}">${escapeHtml(d.file || '')}</span>
       </div>
       <div class="sp-meta">+${d.added || 0} / -${d.deleted || 0}${d.truncated ? ' · 已截断' : ''}</div>
-      <pre class="sp-diff">${lines.map((l) => {
-        const cls = l.startsWith('+++') || l.startsWith('---') ? 'diff-head'
-          : l.startsWith('+') ? 'diff-add'
-            : l.startsWith('-') ? 'diff-del'
-              : l.startsWith('@@') ? 'diff-hunk' : '';
-        return `<span class="dl-line ${cls}">${escapeHtml(l) || ' '}</span>`;
-      }).join('')}</pre>`;
+      <div class="sp-diffbox" data-wt-diffbox></div>`;
+    spDrawDiff(body.querySelector('[data-wt-diffbox]'), d.diff, d.file || spState.wtFile);
     body.querySelector('[data-wt-back]')?.addEventListener('click', () => {
       spState.wtFile = null;
       spLastKey = '';
@@ -848,6 +939,7 @@ async function spRenderWorktree(body, node) {
       <button type="button" class="sp-file" data-wt-file="${escapeHtml(f.path)}" title="${escapeHtml(f.path)}">
         <span class="sp-file-status s-${kind}">${escapeHtml(f.label)}</span>
         <span class="sp-file-path">${escapeHtml(f.path)}</span>
+        ${f.added != null || f.deleted != null ? `<span class="sp-diffstat"><i>+${f.added ?? 0}</i><em>-${f.deleted ?? 0}</em></span>` : ''}
       </button>`;
     }).join('')}</div>` : `<div class="sp-empty">${info.dirtyCount ? '改动列表读取失败，稍后重试' : '没有未提交改动'}</div>`}`;
   body.querySelectorAll('[data-wt-file]').forEach((btn) => {

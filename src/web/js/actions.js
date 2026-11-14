@@ -54,6 +54,12 @@ $('btn-discover').onclick = async () => {
   }
 };
 $('btn-attach').onclick = () => attachFlow();
+$('btn-launch')?.addEventListener('click', () => {
+  // 会话必须挂在任务下面：没选中任务就不允许发起
+  if (!currentTask) { toast('先在左侧选中一个任务，再新开会话'); return; }
+  const cwd = currentTask?.nodes?.find((n) => n.cwd)?.cwd || currentTask?.cwd || '';
+  newSessionFlow(cwd);
+});
 // 会话标签：激活 / 关闭
 $('sess-tabs').addEventListener('click', (e) => {
   const closeBtn = e.target.closest('[data-close]');

@@ -180,7 +180,18 @@ function renderPanes() {
   for (const id of visible) setTimeout(() => paneHandles.get(id)?.refit(), 60);
   area.querySelector('#ws-empty')?.remove();
   if (!openTabs.length && !area.querySelector('.workspace-empty')) {
-    area.insertAdjacentHTML('beforeend', `<div class="workspace-empty" id="ws-empty"><div class="empty-icon">⌨</div><h2>选择或新建一个会话</h2><p>点侧栏「会话链」里的卡片，或顶栏「接入已有会话」。</p></div>`);
+    const taskEmpty = currentTask && !currentTask.nodes?.length;
+    const extra = taskEmpty
+      ? `<button class="btn-primary" id="ws-empty-launch" style="margin-top:14px">▶ 发起第一场对话（Pi / Codex / Claude）</button>`
+      : '';
+    area.insertAdjacentHTML('beforeend', `<div class="workspace-empty" id="ws-empty"><div class="empty-icon">⌨</div><h2>${taskEmpty ? '这个任务还没有会话' : '选择或新建一个会话'}</h2><p>${taskEmpty ? '选一个工具、指定工作目录，开一场全新对话。' : '点侧栏「会话链」里的卡片，或顶栏「接入已有会话」。'}</p>${extra}</div>`);
+    if (taskEmpty) {
+      area.querySelector('#ws-empty-launch')?.addEventListener('click', () => {
+        if (!currentTask) { toast('先在左侧选中一个任务，再新开会话'); return; }
+        const cwd = currentTask?.nodes?.find((n) => n.cwd)?.cwd || currentTask?.cwd || '';
+        newSessionFlow(cwd);
+      });
+    }
   } else {
     area.querySelector('#ws-empty')?.remove();
   }

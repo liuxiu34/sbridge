@@ -25,6 +25,9 @@
     "web/vendor/xterm.css": "src/web/vendor/xterm.css",
     "web/vendor/addon-fit.js": "src/web/vendor/addon-fit.js",
     "web/vendor/addon-canvas.js": "src/web/vendor/addon-canvas.js",
-    "web/vendor/mermaid.min.js": "src/web/vendor/mermaid.min.js"
+    "web/vendor/mermaid.min.js": "src/web/vendor/mermaid.min.js",
+    "web/vendor/diff2html.min.css": "src/web/vendor/diff2html.min.css",
+    "web/vendor/diff2html-ui-slim.min.js": "src/web/vendor/diff2html-ui-slim.min.js",
+    "web/vendor/highlight.min.js": "src/web/vendor/highlight.min.js"
   }
 }
