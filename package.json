@@ -1,6 +1,6 @@
 {
   "name": "sbridge",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "type": "module",
   "description": "会话接力工作台：在 Codex / Pi / Claude Code 之间搬运本地会话",
