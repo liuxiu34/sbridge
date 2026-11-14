@@ -461,7 +461,7 @@ function createCotTimeline(listEl, options) {
   let firstTs = null;
   let lastTs = null;
   let emptyMessage = '会话还没有可展示的工作轨迹；在下方输入框发第一条消息吧。';
-  let localUserPending = null; // 本地乐观显示的用户消息文本（等 SSE 真事件到达后丢弃重复）
+  const localUserPending = new Map(); // 多条已接收消息独立去重，不互相覆盖。
   let titleEl = null;
   let workingEl = null;
   let workingLabelEl = null;
@@ -472,6 +472,7 @@ function createCotTimeline(listEl, options) {
   let hasOlder = false;
   let olderBefore = 0;
   let olderLoading = false;
+  let historyVersion = 0;
 
   const activeStep = () => {
     for (let i = steps.length - 1; i >= 0; i--) if (steps[i].status === 'active') return steps[i];
@@ -640,15 +641,18 @@ function createCotTimeline(listEl, options) {
 
   const loadOlder = async () => {
     if (!hasOlder || olderLoading || steps.length >= STEPS_CAP) return;
+    const version = historyVersion;
     olderLoading = true;
     render();
     try {
       const r = await fetch(`/api/session-history?tool=${encodeURIComponent(node.tool)}&file=${encodeURIComponent(node.file)}&before=${olderBefore}&limit=${OLDER_LIMIT}`);
       const data = await r.json();
+      if (version !== historyVersion) return;
       if (Array.isArray(data.events) && data.events.length) prependSteps(data.events);
       hasOlder = !!data.hasMore;
       olderBefore = data.before ?? olderBefore;
     } catch { /* 失败保留原状，可重试 */ }
+    if (version !== historyVersion) return;
     olderLoading = false;
     render();
   };
@@ -922,14 +926,15 @@ function createCotTimeline(listEl, options) {
   const toolStep = (evt) => {
     const info = extractToolInfo(evt.toolName, evt.args);
     const meta = COT_KIND_META[info.kind] || COT_KIND_META.other;
-    const query = info.command || info.query || info.path || cotFirstLine(String(evt.args ?? ''), 130);
+    const serializedArgs = typeof evt.args === 'string' ? evt.args : JSON.stringify(evt.args ?? {}, null, 2);
+    const query = info.command || info.query || info.path || cotFirstLine(serializedArgs, 130);
     // v2 降噪：标签不带 emoji；命令用 `$ cmd` 前缀（等宽字体靠 kind-cmd class）
     const label = info.kind === 'edit' ? `编辑 · ${truncate(info.path || '(未知文件)', 56)}`
       : info.kind === 'cmd' ? `$ ${truncate(info.command || '', 110)}`
       : info.kind === 'read' ? `读取 · ${truncate(info.path || info.query || '', 110)}`
       : `${evt.toolName || meta.label}`;
     const diff = info.kind === 'edit' && (info.del?.length || info.add?.length) ? diffHtml(info.del, info.add) : '';
-    const argsText = clipText(String(evt.args ?? ''), 1800);
+    const argsText = clipText(serializedArgs, 1800);
     return {
       phase: 'tool',
       status: 'active',
@@ -1057,8 +1062,16 @@ function createCotTimeline(listEl, options) {
   return {
     /* 本地乐观插入用户消息：无头 CLI 往往要到执行结束才落盘，先显示出来，
        等 SSE 里真正的同文本 user 事件到达时再丢弃重复项 */
+    reset() {
+      historyVersion++; olderLoading = false;
+      steps.length = 0; byCall.clear(); copyTexts.clear(); openDetails.clear(); openTurns.clear(); localUserPending.clear();
+      firstTs = lastTs = null; gone = false; connected = false; hasOlder = false; olderBefore = 0;
+      lastOutcome = null; outcomeTurnStart = null;
+      render();
+    },
     addLocalUser(text) {
-      localUserPending = String(text ?? '').trim();
+      const key = String(text ?? '').trim();
+      localUserPending.set(key, (localUserPending.get(key) || 0) + 1);
       const ts = new Date().toISOString();
       pushStep(messageStep({ kind: 'user', text, ts, local: true }), { ts });
     },
@@ -1072,9 +1085,10 @@ function createCotTimeline(listEl, options) {
         if (text.startsWith('【侧边对话】') || text.startsWith('已接收主会话上下文摘录')) return;
       }
       // 乐观消息去重：SSE 收到同一句用户消息时，保留本地那条（避免出现两个一模一样的用户气泡）
-      if (evt.kind === 'user' && localUserPending != null
-        && String(evt.text ?? '').trim() === localUserPending) {
-        localUserPending = null;
+      const pendingKey = String(evt.text ?? '').trim();
+      if (evt.kind === 'user' && localUserPending.has(pendingKey)) {
+        const count = localUserPending.get(pendingKey) - 1;
+        if (count) localUserPending.set(pendingKey, count); else localUserPending.delete(pendingKey);
         return;
       }
       if (evt.kind === 'user' || evt.kind === 'assistant') pushStep(messageStep(evt), evt);
@@ -1117,7 +1131,7 @@ function createCotTimeline(listEl, options) {
       }
     },
     isEmpty() { return steps.length === 0; },
-    destroy() { /* 无定时器需要清理 */ },
+    destroy() { historyVersion++; },
   };
 }
 

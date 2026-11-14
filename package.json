@@ -1,12 +1,13 @@
 {
   "name": "sbridge",
-  "version": "1.2.2",
+  "version": "1.2.4",
   "private": true,
   "type": "module",
   "description": "会话接力工作台：在 Codex / Pi / Claude Code 之间搬运本地会话",
   "license": "Apache-2.0",
   "homepage": "https://github.com/liuxiu34/sbridge",
   "scripts": {
+    "test": "node --test tests/*.test.mjs",
     "app": "node src/server.mjs",
     "electron": "electron src/electron-main.cjs",
     "dist": "electron-builder --win nsis --publish never",

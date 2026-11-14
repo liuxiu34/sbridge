@@ -2423,3 +2423,31 @@ body.theme-dark .sp-code-hl .hljs-built_in, body.theme-dark .sp-code-hl .hljs-ty
 .dock-actions { display: flex; gap: 6px; justify-content: flex-end; }
 .dock-actions button { border: 1px solid var(--line-strong); background: var(--card); color: var(--muted); border-radius: 8px; font-size: 11.5px; padding: 3px 10px; cursor: pointer; font-family: inherit; }
 .dock-actions button:hover { color: var(--danger); border-color: var(--danger); }
+
+/* 等待用户选择：与输入框相邻，长问题独立滚动，不挤掉消息输入。 */
+.execution-owner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px; margin-bottom: 8px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--muted); font-size: 12px; }
+.execution-owner button, .queue-bar [data-resume-queue] { background: var(--card); border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text); padding: 5px 9px; cursor: pointer; }
+.interaction-panel { flex: none; max-height: min(44vh, 440px); overflow: auto; margin-bottom: 10px; scrollbar-gutter: stable; }
+.interaction-panel[hidden], .execution-owner[hidden] { display: none; }
+.interaction-card { border: 1px solid var(--line-strong); border-radius: 12px; background: var(--card); color: var(--text); padding: 14px; margin: 0 0 8px; font-size: 13px; }
+.interaction-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.interaction-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent, #6d66df); flex: none; }
+.interaction-description { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 170px; overflow: auto; font: 12px/1.6 var(--mono, monospace); color: var(--muted); }
+.interaction-card fieldset { min-width: 0; border: 0; padding: 0; margin: 0 0 14px; }
+.interaction-card legend { font-weight: 600; line-height: 1.6; margin-bottom: 8px; overflow-wrap: anywhere; }
+.interaction-option { display: flex; align-items: flex-start; gap: 9px; padding: 9px 10px; margin: 5px 0; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.interaction-option:has(input:checked) { border-color: var(--accent, #6d66df); background: color-mix(in srgb, var(--accent, #6d66df) 8%, var(--card)); }
+.interaction-option input { flex: none; margin-top: 3px; accent-color: var(--accent, #6d66df); }
+.interaction-option span { min-width: 0; overflow-wrap: anywhere; }
+.interaction-option b { font-weight: 500; }
+.interaction-option small { display: block; color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 3px; }
+.interaction-custom { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 12px; margin-top: 9px; }
+.interaction-custom input, .interaction-custom textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 7px; padding: 8px 10px; background: var(--bg); color: var(--text); font: inherit; }
+.interaction-footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 8px; }
+.interaction-footer button { border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 13px; background: var(--card); color: var(--text); cursor: pointer; font: inherit; }
+.interaction-footer button.primary { background: var(--accent, #6d66df); border-color: transparent; color: #fff; }
+.interaction-footer button.danger { color: var(--danger); }
+.interaction-footer button:disabled { opacity: .55; cursor: wait; }
+.interaction-error { color: var(--danger); font-size: 12px; padding: 5px 0; }
+.interaction-card.is-choice-list .interaction-footer { flex-direction: column; align-items: stretch; }
+.interaction-card.is-choice-list .interaction-footer button { text-align: left; overflow-wrap: anywhere; }

@@ -12,6 +12,7 @@
     "web/js/term.js": "src/web/js/term.js",
     "web/js/layout.js": "src/web/js/layout.js",
     "web/js/stream.js": "src/web/js/stream.js",
+    "web/js/interactions.js": "src/web/js/interactions.js",
     "web/js/pane.js": "src/web/js/pane.js",
     "web/js/sidebar.js": "src/web/js/sidebar.js",
     "web/js/board.js": "src/web/js/board.js",
