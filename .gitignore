@@ -19,3 +19,8 @@ sea-config-diag.json
 npm-debug.log*
 .DS_Store
 Thumbs.db
+
+# 内部记录不进公开仓库：验收记录与开发进度属于开发过程文档，放在仓库外的
+# ../sbridge-internal/ 里；这里兜底防止再被误提交
+*验收记录*.md
+项目开发进度.md
