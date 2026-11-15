@@ -243,6 +243,16 @@ export function readApiConfig(tool) {
 }
 
 /* ---------------- 写 ---------------- */
+/* omp 认可的 compat 键（从 omp 包里核对过）。Pi 还有 sendSessionAffinityHeaders 之类，
+   写进 omp 会让它每次启动都打一行 "Unknown compat key" 警告，这里先剔掉。 */
+const OMP_COMPAT_KEYS = new Set(['supportsStrictMode', 'supportsStore', 'supportsDeveloperRole']);
+function filterCompat(compat) {
+  if (!compat || typeof compat !== 'object' || Array.isArray(compat)) return compat;
+  const out = {};
+  for (const [k, v] of Object.entries(compat)) if (OMP_COMPAT_KEYS.has(k)) out[k] = v;
+  return out;
+}
+
 function cleanProviders(list) {
   if (!Array.isArray(list)) throw new Error('providers 必须是数组');
   const seen = new Set();
@@ -252,14 +262,20 @@ function cleanProviders(list) {
     if (seen.has(name)) throw new Error(`Provider 重名：${name}`);
     seen.add(name);
     const models = (Array.isArray(p.models) ? p.models : [])
-      .map((m) => ({ id: String(m?.id || '').trim(), name: String(m?.name || '').trim(), extra: m?.extra || {} }))
+      .map((m) => {
+        const extra = { ...(m?.extra || {}) };
+        if ('compat' in extra) extra.compat = filterCompat(extra.compat);
+        return { id: String(m?.id || '').trim(), name: String(m?.name || '').trim(), extra };
+      })
       .filter((m) => m.id);
+    const extra = { ...(p.extra && typeof p.extra === 'object' ? p.extra : {}) };
+    if ('compat' in extra) extra.compat = filterCompat(extra.compat);
     return {
       name,
       baseUrl: String(p.baseUrl || '').trim(),
       api: String(p.api || '').trim(),
       apiKey: String(p.apiKey || ''),
-      extra: p.extra && typeof p.extra === 'object' ? p.extra : {},
+      extra,
       models,
     };
   });
@@ -317,28 +333,24 @@ export function writeApiConfig(tool, { providers, defaultModel } = {}) {
     throw new Error(`omp 要求每个 provider 都填 API Key，这些还没有：${noKey.join('、')}。请补上或删掉它们。`);
   }
   writeText(OMP_MODELS, emitYamlProviders(list));
+  /* config.yml 只维护 modelRoles.default 这一项。这里整块重写，
+     避免出现两个 modelRoles 键（YAML 重复键会让解析结果不确定）。 */
   const conf = readText(OMP_CONFIG);
-  let lines = conf.split('\n');
-  let replaced = false;
-  if (def) {
-    lines = lines.map((line) => {
-      if (replaced || !/^\s*default:\s*\S+/.test(line)) return line;
-      replaced = true;
-      return `  default: ${scalar(def)}`;
-    });
-  } else if (lines.some((l) => /^\s*default:\s*\S+/.test(l))) {
-    // 选「不设置」= 把 default 行删掉；modelRoles 空了就一起删
-    lines = lines.filter((l) => !/^\s*default:\s*\S+/.test(l));
-    if (lines.some((l) => /^\s*modelRoles:\s*$/.test(l)) && !lines.some((l) => /^\s{2}\w+:/.test(l))) {
-      lines = lines.filter((l) => !/^\s*modelRoles:\s*$/.test(l));
-    }
-    replaced = true;
+  const kept = [];
+  let inRoles = false;
+  for (const line of conf.split('\n')) {
+    // modelRoles 可能写成 `modelRoles:` 也可能是 `modelRoles: {}`，两种都要吃掉
+    if (/^modelRoles:\s*(\{\s*\})?\s*$/.test(line)) { inRoles = true; continue; }
+    if (inRoles && /^\s{2,}\S/.test(line)) continue; // 丢掉旧的 modelRoles 子项
+    if (inRoles && /^\S/.test(line) && !/^\s*#/.test(line)) inRoles = false;
+    if (inRoles && !line.trim()) continue;
+    if (/^\s*#\s*sbridge 接入默认值/.test(line)) continue; // 旧的说明注释一并清掉
+    kept.push(line);
   }
-  const out = lines;
-  if (!replaced && def) {
-    if (/\nmodelRoles:\s*$/m.test(conf)) out.push(`  default: ${scalar(def)}`);
-    else out.push('modelRoles:', `  default: ${scalar(def)}`);
-  }
-  writeText(OMP_CONFIG, `${out.join('\n').replace(/\n+$/, '')}\n`);
+  const body = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const parts = [];
+  if (body) parts.push(body);
+  if (def) parts.push('modelRoles:', `  default: ${scalar(def)}`);
+  writeText(OMP_CONFIG, `${parts.join('\n')}\n`);
   return { ok: true, providers: list.length, defaultModel: def };
 }
