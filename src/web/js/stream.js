@@ -394,7 +394,9 @@ function cotSourceMeta(tool) {
 }
 
 function createCotTimeline(listEl, options) {
-  const { node, isFirstBatch, nearBottom, toBottom, scheduleStreamUi, isTerminalRunning, isHeadlessRunning, headlessElapsed, scrollEl, hideSeed, hideBranch, onResend } = options;
+  const { node, taskId: cotTaskId, isFirstBatch, nearBottom, toBottom, scheduleStreamUi, isTerminalRunning, isHeadlessRunning, headlessElapsed, scrollEl, hideSeed, hideBranch, onResend } = options;
+  // 跨任务分屏：分支等写操作必须落在会话自己的任务下，而不是当前任务
+  const ownerTaskId = () => cotTaskId || (typeof taskIdForNode === 'function' ? taskIdForNode(node.id) : null) || currentTask.id;
   const source = cotSourceMeta(node.tool);
   const uid = `cot-${Math.random().toString(36).slice(2, 9)}`;
   const steps = [];
@@ -414,9 +416,11 @@ function createCotTimeline(listEl, options) {
       }, 2000);
       try {
         toast('正在创建分支…（会用当前工具复制这个会话）');
-        const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/fork`, { method: 'POST' });
+        const r = await api(`/api/tasks/${ownerTaskId()}/nodes/${node.id}/fork`, { method: 'POST' });
         if (r.node) {
-          await refreshTask();
+          // 跨任务的会话：刷新它自己的任务详情进缓存；当前任务的刷新逻辑不适用
+          if (ownerTaskId() === currentTask?.id) await refreshTask();
+          else { try { await ensureTaskDetail(ownerTaskId()); } catch { /* 打开时再重试 */ } }
           openSessionTab(r.node.id);
           toast('分支已创建，已在新标签打开（原会话不变）');
         } else {

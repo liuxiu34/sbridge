@@ -70,10 +70,11 @@ $('sess-tabs').addEventListener('click', (e) => {
   else openSessionTab(tab.dataset.tab);
 });
 $('btn-split').onclick = () => toggleSplit();
-$('split-right').onchange = (e) => {
+$('split-right').onchange = async (e) => {
   if (!e.target.value) return;
   layout.mode = 'split';
-  openSessionTab(e.target.value, { slot: 1, split: true });
+  // 下拉按任务分组，选中的可能是其他任务的会话：先保证任务详情在缓存里
+  await openSessionTabInTask(e.target.value, taskIdForNode(e.target.value), { slot: 1, split: true });
 };
 // 白板视图切换（顶栏按钮 + 侧栏链接）
 $('btn-board-view2').onclick = () => toggleBoardView();

@@ -1,6 +1,6 @@
 {
   "name": "sbridge",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "private": true,
   "type": "module",
   "description": "会话接力工作台：在 Codex / Pi / Claude Code 之间搬运本地会话",
@@ -21,7 +21,8 @@
   "devDependencies": {
     "electron": "^45.2.3",
     "electron-builder": "^26.18.0",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "playwright-core": "^1.49.0"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

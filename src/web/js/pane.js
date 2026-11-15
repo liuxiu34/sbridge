@@ -29,22 +29,31 @@ function openSubagentModal(parentNode, data) {
       close();
       if (s.nodeId) { openSessionTab(s.nodeId); return; }
       try {
-        const n = await api(`/api/tasks/${currentTask.id}/nodes`, {
+        // 子代理会话挂到父会话所属任务下（跨任务分屏时不能算到当前任务）
+        const ownerId = taskIdForNode(parentNode.id);
+        const n = await api(`/api/tasks/${ownerId}/nodes`, {
           method: 'POST',
           body: { tool: s.tool, file: s.file, parentNodeId: parentNode.id },
         });
-        currentTask.nodes.push(n);
-        renderMiniChain();
-        renderBoard();
+        if (ownerId === currentTask?.id) {
+          currentTask.nodes.push(n);
+          renderMiniChain();
+          renderBoard();
+        } else {
+          try { await ensureTaskDetail(ownerId); } catch { /* ignore */ }
+        }
         openSessionTab(n.id);
-        toast('子代理会话已接入当前接力链');
+        toast('子代理会话已接入接力链');
       } catch (err) { toast(err.message); }
     };
   });
 }
 
-function createSessionPane(host, node, { active = true, caption } = {}) {
-  const taskId = currentTask.id;
+function createSessionPane(host, node, { active = true, caption, taskId: paneTaskId } = {}) {
+  // 分屏可承载其他任务的会话：接口与「所属任务」一律用会话自己的 taskId，
+  // 不能假定就是 currentTask（跨任务分屏时二者不同）。
+  const taskId = paneTaskId || taskIdForNode(node.id) || currentTask.id;
+  const ownerTask = () => taskForNode(node.id) || currentTask;
   let disposed = false;
   let cleanupComposer = () => {};
   const lastTs = { v: null };
@@ -52,6 +61,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
     <div class="session-pane ${active ? 'active' : 'idle'}">
       <div class="pane-head">
         <span class="chip ${node.tool}">${toolLabel(node.tool)}</span>
+        <span class="pane-task" data-role="panetask" hidden></span>
         <span class="pane-caption" title="${escapeHtml(node.title || '')}">${escapeHtml(caption || node.title || '(会话)')}</span>
         <span class="pane-status" data-role="status"></span>
         <span class="pane-tools">
@@ -139,7 +149,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   const checkoutEl = host.querySelector('[data-role="checkout"]');
   if (checkoutEl) {
     const dirName = String(node.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '';
-    const branch = currentTask?.project?.branch || '';
+    const branch = ownerTask()?.project?.branch || '';
     checkoutEl.textContent = [branch, dirName].filter(Boolean).join(' · ');
   }
 
@@ -376,11 +386,11 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   const renderForkAlert = () => {
     try {
       if (!forkAlertEl) return;
-      if (!currentTask) { forkAlertEl.hidden = true; return; }
+      if (!ownerTask()) { forkAlertEl.hidden = true; return; }
       // 跨会话比「谁更新」仍只看实质代码活动（闲聊不参与）；
       // 链上后代取三个时间戳里最新的那个：fork/接力生成的新会话会把父会话的历史一起带过来，
       // 解析出的 lastCodeActivity 可能与父会话完全相同（甚至更早），只看它会把新会话误判成「没更新」。
-      const nodes = currentTask.nodes || [];
+      const nodes = ownerTask()?.nodes || [];
       const nodeKey = (n) => [n.lastCodeActivity, n.lastActivity, n.createdAt]
         .map((v) => String(v || ''))
         .sort((a, b) => b.localeCompare(a))[0] || '';
@@ -423,7 +433,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         ? `接力链上有更新的会话 ${toolLabel(chainNewer[0].tool)}「${escapeHtml(truncate(chainNewer[0].title || '(会话)', 28))}」· ${fmtTime(nodeKey(chainNewer[0]) || chainNewer[0].createdAt)}${chainNewer.length > 1 ? `（链上另有 ${chainNewer.length - 1} 个更新会话）` : ''}`
         : anyNewer.length
           ? `其他会话有更新的代码改动（可能来自不同功能方向）：${toolLabel(top.tool)}「${escapeHtml(truncate(top.title || '(会话)', 28))}」· ${fmtTime(top.lastCodeActivity)}${anyNewer.length > 1 ? `（另有 ${anyNewer.length - 1} 个更新会话）` : ''}`
-          : `项目里有比本会话更新的磁盘改动（可能来自其他工具）：${fmtTime(currentTask?.project?.lastChangeAt)}${currentTask?.project?.dirtyCount ? ` · ${currentTask.project.dirtyCount} 个未提交文件` : ''}。这里只看工作区事实，不受工具限制`;
+          : `项目里有比本会话更新的磁盘改动（可能来自其他工具）：${fmtTime(ownerTask()?.project?.lastChangeAt)}${ownerTask()?.project?.dirtyCount ? ` · ${ownerTask().project.dirtyCount} 个未提交文件` : ''}。这里只看工作区事实，不受工具限制`;
       forkAlertEl.innerHTML = `<span class="fork-warn">${icon('history', 13)} 本会话可能未掌握项目最新进度：${chainNote}</span>
         ${jumpTarget ? `<button type="button" class="btn-primary small" data-role="jumplatest" title="${chainNewer.length ? '跳到接力链上更新的会话（完整继承历史）' : '跳到全任务最新的会话（跨链只跳转查看，不继承上下文）'}">${icon('handoff', 12)} 跳转到最新会话</button>` : ''}
         <button type="button" class="pbtn" data-role="forkclose" title="关闭提示">×</button>`;
@@ -585,6 +595,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   let inputTa = null; // 输入框引用（在下方 if (active) 里赋值；「编辑重发」等回调要用）
   const cot = createCotTimeline(listEl, {
     node,
+    taskId,
     isFirstBatch: () => firstBatch,
     nearBottom,
     toBottom,
@@ -1071,7 +1082,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
         } else if (!refs && text.startsWith('/')) {
           // 斜杠命令 = TUI 指令：确保终端运行并发送，切到终端视图交互
           if (headlessRunning) throw new Error('当前任务仍在执行，请先完成或取消，再使用原始终端命令');
-          await sendToAgent(node, text);
+          await sendToAgent(node, text, taskId);
           applyStreamView(false);
           await ensureTerminal();
         } else {
@@ -1100,7 +1111,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
   host.querySelector('[data-pact="ctx"]')?.addEventListener('click', () => openCtxModal(node));
   host.querySelector('[data-pact="handoff"]')?.addEventListener('click', () => openHandoffModal(node));
   host.querySelector('[data-pact="export"]')?.addEventListener('click', () => exportNodeMarkdown(node));
-  host.querySelector('[data-pact="worktree"]')?.addEventListener('click', () => openSidePanel('worktree'));
+  host.querySelector('[data-pact="worktree"]')?.addEventListener('click', () => openSidePanel('worktree', { reuse: true }));
   cancelHeadlessBtn?.addEventListener('click', () => cancelHeadless());
   // ⏹ 停止：杀掉该会话挂着的 PTY（等效在终端输入退出命令）；确认一次防误触
   const stopBtn = host.querySelector('[data-pact="stopterm"]');
@@ -1147,6 +1158,7 @@ function createSessionPane(host, node, { active = true, caption } = {}) {
      可见，挂载与显示都正常）。不做自动切换、不做内嵌弹层：隐藏挂载会丢内容，这是
      反复出问题的根源；工作轨迹为主界面 + 终端按需挂载 = 各自都稳定。 */
   const tuiHooks = {
+    taskId,
     onTuiDialog: (active) => {
       const paneEl = host.querySelector('.session-pane');
       if (active && paneEl?.classList.contains('active')) {

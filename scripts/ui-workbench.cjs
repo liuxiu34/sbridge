@@ -15,9 +15,14 @@ const projects = [{ id: 'p1', name: 'sbridge', cwd: 'C:/fixture/sbridge' }, { id
 const nodes = ['codex', 'claude', 'pi'].map((tool, i) => ({ id: `n${i+1}`, tool, title: ['梳理项目与交互流程', '实现统一工作台', '检查输入与决策流程'][i], cwd: projects[0].cwd, file: `fixture-${tool}.jsonl`, sessionId: `session-${i}`, parentNodeId: i ? `n${i}` : null, edgeKind: i ? 'handoff' : null, createdAt: `2026-11-14T0${i+1}:00:00Z` }));
 const task = { id: 't1', projectId: 'p1', project: projects[0], title: '工作台界面打磨', updatedAt: '2026-11-14T09:00:00Z', nodes };
 nodes.forEach(n => { n.summary = { messageCount: 6 }; }); // 有历史的终端不能被自动切回轨迹。
-const tasks = [{ ...task, nodes: undefined, nodeCount: 3 }, { id:'t2', projectId:'p2', title:'整理开发工具', nodeCount:0, updatedAt:'2026-11-13T09:00:00Z' }];
+// 第二个任务带一个会话：验收「跨任务分屏」（分屏不再限定同一任务）
+const t2Node = { id: 'n4', tool: 'omp', title: '梳理 CLI 配置', cwd: projects[1].cwd, file: 'fixture-omp.jsonl', sessionId: 'session-4', createdAt: '2026-11-13T09:00:00Z', summary: { messageCount: 4 } };
+const task2 = { id: 't2', projectId: 'p2', project: projects[1], title: '整理开发工具', updatedAt: '2026-11-13T09:00:00Z', nodes: [t2Node] };
+const tasks = [{ ...task, nodes: undefined, nodeCount: 3 }, { ...task2, nodes: undefined, nodeCount: 1 }];
 const history = [
   { kind:'user', text:'把工作轨迹和输入区域整理得更清晰，保留接力与原始终端。' },
+  // 长用户消息：外层 chat-msg-body 会被撑满整行，气泡必须自己右贴（回归「长消息偏左」）
+  { kind:'user', text:'这段是较长的用户消息，用来验证气泡不会因为正文太长而被撑满整行后从左排起。'.repeat(3) },
   { kind:'assistant', text:'我会先检查页面结构，再统一工作区、输入框和决策卡片的布局。' },
   { kind:'tool_call', toolName:'read', callId:'c1', args:{path:'src/web/js/pane.js'} },
   { kind:'tool_result', callId:'c1', outcome:'已读取会话面板与输入区域。' },
@@ -28,7 +33,7 @@ const history = [
 let status = { status:{running:false,phase:'idle'}, queue:[], interactions:[] };
 let currentModel = 'gpt-5.4', currentEffort = 'high';
 let server, win, wss;
-const calls = [], errors = [], checks = [];
+const calls = [], gets = [], errors = [], checks = [];
 let terms = [], terminalSeq = 0;
 const terminalInputs = [];
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
@@ -50,6 +55,8 @@ function fixture(url, method, body) {
   if (p === '/api/tools') return {tools:['codex','pi','claude','omp'].map(id=>({id,label:id,modes:[]}))};
   if (p === '/api/terms') return {terms};
   if (p === '/api/tasks/t1') return task;
+  if (p === '/api/tasks/t2') return task2;
+  if (p === '/api/browser') return { enabled: false, cdpUrl: 'http://127.0.0.1:9222', port: 9222, toolArgs: { playwrightMcp: '--cdp-endpoint=http://127.0.0.1:9222', chromeDevtoolsMcp: '--browser-url=http://127.0.0.1:9222', browserUse: "cdp_url='http://127.0.0.1:9222'" }, hint: '面板里的浏览器就是唯一实例' };
   if (p.endsWith('/headless-status')) return status;
   if (p.endsWith('/model')) return model();
   if (p.endsWith('/subagents')) return {sessions:[],fix:{}};
@@ -74,6 +81,7 @@ function fixture(url, method, body) {
       return;
     }
     if(url.pathname.startsWith('/api/')) {
+      gets.push({p:url.pathname, q:url.search});
       let raw='';for await(const c of req)raw+=c;
       res.setHeader('content-type','application/json');
       return res.end(JSON.stringify(fixture(url,req.method,raw?JSON.parse(raw):{})));
@@ -93,7 +101,7 @@ function fixture(url, method, body) {
   });
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
   await app.whenReady();
-  win=new BrowserWindow({width:1440,height:1000,show:false,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
+  win=new BrowserWindow({width:1440,height:1000,show:false,webPreferences:{contextIsolation:true,nodeIntegration:false,backgroundThrottling:false,webviewTag:true}});
   win.webContents.on('console-message',e=>{if(e.level==='error')errors.push(e.message);});
   await win.loadURL(`http://127.0.0.1:${server.address().port}/`);
   const ev=code=>win.webContents.executeJavaScript(code,true);
@@ -112,6 +120,9 @@ function fixture(url, method, body) {
     assert.ok(r.composer&&r.width>180&&!r.overflow&&r.question,JSON.stringify(r));
   };
   await until(`document.querySelectorAll('.chat-msg').length>=3`);
+  // 用户气泡右贴：长消息也不能从整行左侧排起（右侧留白必须小于 2px）
+  const userBubbles = await ev(`(()=>{const list=document.querySelector('.sev-list');const lr=list.getBoundingClientRect().right;return [...document.querySelectorAll('.chat-msg.is-user .chat-bubble')].map(b=>{const r=b.getBoundingClientRect();return {w:Math.round(r.width),gapRight:Math.round(lr-r.right)}})})()`);
+  assert.ok(userBubbles.length>=2&&userBubbles.every(b=>b.gapRight<=2),'用户气泡必须右贴 '+JSON.stringify(userBubbles));
   await layoutCheck();await shot('workbench-light');checks.push('完整启动与历史轨迹');
   await click('.turn-process');
   await until(`document.querySelector('.chat-tool-row')?.getBoundingClientRect().height>0`);
@@ -192,21 +203,52 @@ function fixture(url, method, body) {
   await click('#btn-launch');await until(`document.getElementById('ns-cwd')`);await shot('new-session');await escape();checks.push('接力选择与新会话入口');
   await click('#btn-search');
   await ev(`document.getElementById('search-q').value='立即关闭';document.getElementById('search-q').dispatchEvent(new Event('input',{bubbles:true}));`);await escape();await sleep(500);
-  assert.deepEqual(await ev('qaErrors'),[]);checks.push('关闭搜索时取消旧视图更新');
+  {const qe=await ev('qaErrors');assert.deepEqual(qe,[],'qaErrors: '+JSON.stringify(qe));}checks.push('关闭搜索时取消旧视图更新');
   await click('#btn-search');
   await ev(`document.getElementById('search-q').value='输入';document.getElementById('search-q').dispatchEvent(new Event('input',{bubbles:true}));`);
   await until(`document.querySelectorAll('.search-row').length===1`);await shot('search');
   await click('.search-row');await until(`document.querySelectorAll('.chat-msg').length>=3`);checks.push('搜索结果打开原会话');
-  await click('#btn-panel');await until(`document.querySelectorAll('[data-sp]').length===6`);await shot('panels');
+  await click('#btn-panel');await until(`document.querySelectorAll('[data-sp]').length===5`);await shot('panels');
+  // 面板项调整后：不再有「上下文」入口，新增「浏览器」；Worktree 仅从会话菜单打开
+  assert.equal(await ev(`!!document.querySelector('[data-sp="context"]')`),false,'面板启动列表不应再有上下文');
+  assert.equal(await ev(`!!document.querySelector('[data-sp="browser"]')`),true,'面板启动列表应有浏览器');
   await click('[data-sp="files"]');await until(`document.querySelectorAll('[data-entry]').length===3`);
   await layoutCheck();await shot('workbench-files');
   await click('[data-entry="README.md"]');await until(`document.querySelector('.sp-code')?.textContent.includes('会话接力工作台')`);
   await click('[data-sp-back]');await until(`document.querySelectorAll('[data-entry]').length===3`);
   await click('#sp-add');await click('[data-sp="diff"]');await until(`document.querySelector('[data-file]')`);
   await click('[data-file]');await until(`document.querySelector('.d2h-wrapper')`);await shot('workbench-diff');
-  await click('#sp-add');await click('[data-sp="context"]');
-  await until(`document.querySelector('.sp-ctx-usage')`);assert.ok(await ev(`document.querySelector('.sp-ctx-usage b').textContent==='9%'`));
-  await click('[data-ctx-tab="other"]');
+  // 浏览器面板：地址栏 + 占位区域（页面本体是主进程摆上来的 WebContentsView）
+  await click('#sp-add');await click('[data-sp="browser"]');
+  await until(`document.querySelector('.sp-browser-url')`);
+  assert.equal(await ev(`!!document.querySelector('.sp-browser-view[data-br="host"]')`),true,'浏览器面板要有页面占位区域');
+  assert.equal(await ev(`!!document.querySelector('.sp-browser-cdp')`),false,'浏览器面板不显示 CDP 状态条');
+  // 夹具窗口没有 preload/IPC，原生视图不存在 → 必须给出降级说明而不是空白
+  assert.ok(await ev(`/桌面客户端/.test(document.querySelector('.sp-browser-view').textContent)`),'无原生桥接时要显示降级说明');
+  await shot('workbench-browser');
+  checks.push('浏览器面板（占位区域与降级说明）');
+  // 同类型多开：在已有「文件」标签的基础上再开一个，必须真的新增而不是跳回原来那个
+  const filesBefore = await ev(`spTabs.filter(t=>t.surface==='files').length`);
+  await click('#sp-add');await click('[data-sp="files"]');
+  await until(`document.querySelectorAll('[data-entry]').length===3`);
+  await click('#sp-add');await click('[data-sp="files"]');
+  await until(`spTabs.filter(t=>t.surface==='files').length>=${filesBefore + 1}`);
+  assert.ok(await ev(`spTabs.filter(t=>t.surface==='files').length`)>=2,'同一功能必须能开多个标签');
+  // 两个文件标签各自独立：一个进子目录，另一个保持根目录
+  const tabIds = JSON.parse(await ev(`JSON.stringify(spTabs.filter(t=>t.surface==='files').map(t=>t.id))`));
+  await ev(`spActivateTab(${JSON.stringify(tabIds[0])});spRender();void 0`);
+  await until(`document.querySelectorAll('[data-entry]').length===3`);
+  await click('[data-entry="README.md"]').catch(()=>{});
+  await ev(`spState.file='README.md';spLastKey='';spRender();void 0`);
+  await until(`document.querySelector('.sp-code')`);
+  await ev(`spActivateTab(${JSON.stringify(tabIds[1])});spRender();void 0`);
+  await until(`document.querySelectorAll('[data-entry]').length===3`);
+  assert.equal(await ev(`!!document.querySelector('.sp-code')`),false,'另一个文件标签不应继承同类的浏览位置');
+  const titles = await ev(`[...document.querySelectorAll('.sp-tab-label')].map(e=>e.textContent)`);
+  assert.ok(titles.some(t=>/文件 2/.test(t)),'同类标签要有序号区分：'+JSON.stringify(titles));
+  await shot('workbench-multi-tab');
+  checks.push('同类型多标签与独立状态');
+  // 真实接管（Playwright over CDP）由 scripts/verify-browser-cdp.mjs 对安装版验证
   await click('.workspace-menu summary');await escape();
   assert.equal(await ev(`document.getElementById('side-panel').hidden`),false,'Esc只关闭顶层菜单');
   await click('#sp-close');checks.push('文件浏览、差异、上下文与面板切换');
@@ -220,6 +262,40 @@ function fixture(url, method, body) {
   const inputs=await ev(`[...document.querySelectorAll('.pane-host:not([hidden]) .composer')].map(c=>({w:c.clientWidth,b:c.getBoundingClientRect().bottom}))`);
   assert.ok(inputs.every(c=>c.w>250&&c.b<1000));
   await click('.workspace-menu summary');await click('#btn-split');checks.push('分屏及独立输入区域');
+  // 跨任务分屏：右侧下拉按任务分组，选其他任务的会话后两侧同时存在
+  await click('.workspace-menu summary');await click('#btn-split');
+  await until(`document.querySelectorAll('.pane-host:not([hidden])').length===2`);
+  await until(`(()=>{const s=document.getElementById('split-right');return s&&[...s.querySelectorAll('optgroup')].some(g=>g.label==='整理开发工具')&&[...s.options].some(o=>o.value==='n4')})()`);
+  await ev(`(()=>{const s=document.getElementById('split-right');s.value='n4';s.dispatchEvent(new Event('change'));})()`);
+  await until(`!!document.querySelector('[data-pane-host="n4"]')&&!document.querySelector('[data-pane-host="n4"]').hidden`);
+  assert.equal(await ev(`document.querySelectorAll('.pane-host:not([hidden])').length`),2,'跨任务分屏必须两个面板都可见');
+  // 聚焦 n4 后「当前任务」跟到 t2，于是 t1 那个面板带上「所属任务」标记
+  assert.ok(await ev(`[...document.querySelectorAll('.pane-host:not([hidden]) [data-role="panetask"]')].some(el=>!el.hidden&&/工作台界面打磨|整理开发工具/.test(el.textContent))`),'跨任务面板要标出所属任务');
+  assert.ok(await ev(`!!document.querySelector('.stab-task')`),'跨任务标签要有任务名标记');
+  // 面板请求必须落在 t2 下（不是 currentTask=t1）
+  await until(`true`);
+  await sleep(400);
+  assert.ok(gets.some(g=>g.p.startsWith('/api/tasks/t2/')),'跨任务面板的接口必须用会话所属任务');
+  await shot('workbench-cross-task-split');
+  await click('.workspace-menu summary');await click('#btn-split');
+  await until(`document.querySelectorAll('.pane-host:not([hidden])').length===1`);
+  checks.push('跨任务分屏（下拉分组与任务归属）');
+  // 切任务不清空标签：t1 的标签与 t2 的标签都保留，当前任务上下文跟随聚焦会话
+  const tabsBefore = await ev(`[...document.querySelectorAll('.stab')].map(t=>t.dataset.tab)`);
+  assert.ok(tabsBefore.includes('n4'),'切任务前应含跨任务标签');
+  await ev(`openTask('t2')`);
+  await until(`currentTaskId==='t2'`);
+  await sleep(300);
+  const tabsAfter = await ev(`[...document.querySelectorAll('.stab')].map(t=>t.dataset.tab)`);
+  assert.ok(tabsAfter.includes('n4'),'切到 t2 后跨任务标签必须保留');
+  assert.ok(tabsAfter.length>=tabsBefore.length-1,`切任务不应清空标签（前 ${tabsBefore.length} 后 ${tabsAfter.length}）`);
+  assert.ok(await ev(`!!document.querySelector('[data-pane-host="n4"]')`),'已打开面板不能被销毁');
+  await shot('workbench-task-switch-keeps-tabs');
+  await ev(`openTask('t1')`);
+  await until(`currentTaskId==='t1'`);
+  await sleep(300);
+  assert.ok((await ev(`[...document.querySelectorAll('.stab')].map(t=>t.dataset.tab)`)).includes('n4'),'切回 t1 标签仍在');
+  checks.push('切换任务保留已打开标签与面板');
   win.setSize(720,800);await sleep(200);await click('#btn-sidebar');
   assert.equal(await ev(`document.querySelector('.sidebar').getBoundingClientRect().width>0`),true);await shot('sidebar-compact');
   await click('[data-mnode="n3"]');assert.equal(await ev(`document.body.classList.contains('sidebar-open')`),false);
@@ -230,7 +306,7 @@ function fixture(url, method, body) {
   win.setSize(1440,1000);await sleep(200);
   await ev(`theme.current='light';theme.apply();openSessionTab('n3');void 0;`);await shot('workbench-final-light');
   await ev(`theme.current='dark';theme.apply();void 0;`);await shot('workbench-final-dark');
-  assert.deepEqual(await ev('qaErrors'),[]);
+  {const qe=await ev('qaErrors');assert.deepEqual(qe,[],'qaErrors: '+JSON.stringify(qe));}
   assert.deepEqual(errors,[]);
   console.log(JSON.stringify({passed:true,checks,output}));
   await ev('closeAllPanes();void 0;');win.destroy();wss.clients.forEach(c=>c.terminate());wss.close();server.closeAllConnections();server.close();app.exit(0);

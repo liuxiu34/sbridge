@@ -6,12 +6,13 @@ const SP_ITEMS = [
   { id: 'git', icon: 'git', label: 'Git', key: 'G', hint: '当前项目的分支、未提交改动、逐文件 diff 与最近提交' },
   { id: 'diff', icon: 'diff', label: '改动', key: 'D', hint: '当前会话目录的 git 改动与逐文件 diff' },
   { id: 'files', icon: 'folder', label: '文件', key: 'F', hint: '浏览会话目录，点文件看文本内容' },
-  { id: 'context', icon: 'context', label: '上下文', key: 'C', hint: '这个任务已被捕获的认知与证据' },
-  { id: 'worktree', icon: 'git', label: 'Worktree', key: 'W', hint: '独立工作区的分支状态与合并' },
+  { id: 'browser', icon: 'browser', label: '浏览器', key: 'B', hint: '内嵌浏览器，编程工具可直接控制它' },
+  // 以下两项不在启动列表里展示，但保留 surface 本身（Worktree 仍可从会话菜单打开）
+  { id: 'context', icon: 'context', label: '上下文', key: 'C', hidden: true, hint: '这个任务已被捕获的认知与证据' },
+  { id: 'worktree', icon: 'git', label: 'Worktree', key: 'W', hidden: true, hint: '独立工作区的分支状态与合并' },
 ];
 
 const spState = { open: false, surface: null, dir: '', file: null, wtFile: null, gitFile: null, gitRefresh: false, ctxTab: 'files' };
-let spTabs = []; // 面板顶部标签：打开过的 surface，可来回切换
 let spLastKey = '';
 
 /* 侧边对话运行时状态：独立会话 + 自己的 SSE 流，面板关闭/切换时回收 */
@@ -23,17 +24,21 @@ function currentPanelNode() {
 }
 
 function spApiBase(node) {
-  return `/api/tasks/${currentTask.id}/nodes/${node.id}`;
+  // 跨任务分屏：面板跟随聚焦会话，节点级接口必须落在会话自己的任务下
+  return `/api/tasks/${taskIdForNode(node.id)}/nodes/${node.id}`;
 }
 
 function refreshSidePanel(force = false) {
   if (!spState.open) return;
   // 侧边对话是并行会话：不跟当前标签走，否则切个标签就把对话流打断
+  // 签名带上标签实例与状态：同类型多开、或标签内切换状态时都要重绘
   const key = spState.surface === 'side'
-    ? `side|${currentTask?.id || ''}|${spChat.nodeId || ''}`
+    ? `side|${spActiveTabId || ''}|${currentTask?.id || ''}|${spChat.nodeId || ''}`
     : spState.surface === 'git'
-      ? `git|${currentTask?.id || ''}|${spState.gitFile || ''}`
-      : `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
+      ? `git|${spActiveTabId || ''}|${taskIdForNode(activeTabId) || ''}|${spState.gitFile || ''}`
+      : spState.surface === 'browser'
+        ? `browser|${spActiveTabId || ''}`
+        : `${spActiveTabId || ''}|${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
   if (!force && key === spLastKey) return;
   spLastKey = key;
   spRender();
@@ -101,32 +106,105 @@ function toggleSidePanel(force) {
     spRender();
   } else {
     spUnmountSide();
+    if (typeof spParkBrowser === 'function') spParkBrowser();
     $('sp-body')?.classList.remove('sp-body-chat');
   }
   setTimeout(spRefitTerm, 60);
 }
 
-function openSidePanel(id) {
-  spState.surface = id || null;
+/* 面板标签：每种 surface 可以有多个实例（例如两条独立的侧边对话、两个文件浏览器）。
+   每个标签持有自己的状态快照；spState 始终代表「当前激活标签」的状态，
+   所以下面的渲染函数不用改。 */
+let spTabs = [];            // [{ id, surface, snap: { dir,file,wtFile,gitFile,gitRefresh,ctxTab,sideNodeId } }]
+let spSeq = 0;
+let spActiveTabId = null;
+let spLauncherShown = false; // 点击「＋」时临时显示启动列表（不销毁标签）
+
+const spTabById = (id) => spTabs.find((t) => t.id === id) || null;
+const spActiveTab = () => spTabById(spActiveTabId);
+const spSurfaceLabel = (surface) => (SP_ITEMS.find((i) => i.id === surface)?.label) || surface;
+/** 同名标签加序号：两个「侧边对话」显示成「侧边对话」/「侧边对话 2」 */
+function spTabTitle(tab) {
+  const base = spSurfaceLabel(tab.surface);
+  const same = spTabs.filter((t) => t.surface === tab.surface);
+  if (same.length < 2) return base;
+  return `${base} ${same.indexOf(tab) + 1}`;
+}
+
+/** 把当前 spState 的字段写回激活标签的快照 */
+function spSaveActiveSnap() {
+  const tab = spActiveTab();
+  if (!tab) return;
+  tab.snap = {
+    dir: spState.dir, file: spState.file, wtFile: spState.wtFile,
+    gitFile: spState.gitFile, gitRefresh: false, ctxTab: spState.ctxTab,
+    sideNodeId: spChat.nodeId,
+  };
+}
+
+/** 让 spState 指向某个标签：先把旧的存回去，再载入新的 */
+function spActivateTab(id) {
+  spSaveActiveSnap();
+  const tab = spTabById(id);
+  if (!tab) { spActiveTabId = null; spState.surface = null; return null; }
+  spActiveTabId = id;
+  spLauncherShown = false;
+  const snap = tab.snap || {};
+  spState.surface = tab.surface;
+  spState.dir = snap.dir || '';
+  spState.file = snap.file ?? null;
+  spState.wtFile = snap.wtFile ?? null;
+  spState.gitFile = snap.gitFile ?? null;
+  spState.gitRefresh = !!snap.gitRefresh;
+  spState.ctxTab = snap.ctxTab || 'files';
+  // 侧边对话每个标签各挂一条
+  spChat.nodeId = snap.sideNodeId || null;
+  spLastKey = '';
+  return tab;
+}
+
+/**
+ * 打开一个面板标签。
+ * @param surface surface id（side/git/diff/files/browser/context/worktree）
+ * @param opts.reuse true = 已有同类型标签就直接切过去（程序入口用）；
+ *                   false = 总是新开一个（面板启动列表点击用，用户可以开多个）
+ */
+function openSidePanel(surface, { reuse = false } = {}) {
+  if (!surface) return;
+  toggleSidePanel(true);
+  if (reuse) {
+    const hit = spTabs.find((t) => t.surface === surface);
+    if (hit) { spActivateTab(hit.id); spRender(); return; }
+  }
+  spSaveActiveSnap();
+  const tab = { id: `spt-${++spSeq}`, surface, snap: {} };
+  spTabs.push(tab);
+  spActiveTabId = tab.id;
+  spLauncherShown = false;
+  spState.surface = surface;
   spState.dir = '';
   spState.file = null;
   spState.wtFile = null;
   spState.gitFile = null;
-  if (id && !spTabs.includes(id)) spTabs.push(id);
+  spState.gitRefresh = false;
+  spState.ctxTab = 'files';
+  // 侧边对话新标签：不继承别的标签的对话，让它显示选择列表
+  spChat.nodeId = null;
   spLastKey = '';
-  toggleSidePanel(true);
   spRender();
 }
 
-/** 关闭一个面板标签；关的是当前页就退到上一个，没有标签就回到启动列表 */
+/** 关闭一个面板标签；关的是当前页就退到相邻的一个，没有标签就回到启动列表 */
 function spCloseTab(id) {
-  spTabs = spTabs.filter((t) => t !== id);
-  if (spState.surface === id) {
-    spState.surface = spTabs[spTabs.length - 1] || null;
-    spState.dir = '';
-    spState.file = null;
-    spState.wtFile = null;
-    spState.gitFile = null;
+  const idx = spTabs.findIndex((t) => t.id === id);
+  if (idx === -1) return;
+  const [removed] = spTabs.splice(idx, 1);
+  if (removed.surface === 'browser') { try { spDisposeBrowserTab(id); } catch { /* ignore */ } }
+  if (spActiveTabId === id) {
+    const next = spTabs[idx] || spTabs[idx - 1] || null;
+    spActiveTabId = null;
+    spState.surface = null;
+    if (next) spActivateTab(next.id);
   }
   spLastKey = '';
   spRender();
@@ -135,18 +213,20 @@ function spCloseTab(id) {
 function spRenderTabs() {
   const el = $('sp-tabs');
   if (!el) return;
-  el.innerHTML = spTabs.map((id) => {
-    const it = SP_ITEMS.find((i) => i.id === id);
+  el.innerHTML = spTabs.map((tab) => {
+    const it = SP_ITEMS.find((i) => i.id === tab.surface);
     if (!it) return '';
-    return `<button type="button" class="sp-tab ${spState.surface === id ? 'active' : ''}" data-tab="${id}" title="${escapeHtml(it.hint)}">
-      ${icon(it.icon, 12)}<span class="sp-tab-label">${escapeHtml(it.label)}</span>
-      <span class="sp-tab-x" data-tab-close="${id}" title="关闭这个面板">×</span>
+    const title = spTabTitle(tab);
+    return `<button type="button" class="sp-tab ${spActiveTabId === tab.id ? 'active' : ''}" data-tab="${tab.id}" title="${escapeHtml(it.hint)}">
+      ${icon(it.icon, 12)}<span class="sp-tab-label">${escapeHtml(title)}</span>
+      <span class="sp-tab-x" data-tab-close="${tab.id}" title="关闭这个面板">×</span>
     </button>`;
   }).join('');
   el.querySelectorAll('[data-tab]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       if (e.target.closest('[data-tab-close]')) return;
-      openSidePanel(btn.dataset.tab);
+      spActivateTab(btn.dataset.tab);
+      spRender();
     });
   });
   el.querySelectorAll('[data-tab-close]').forEach((x) => {
@@ -177,18 +257,21 @@ function spToggleExpand() {
 async function spRender() {
   const body = $('sp-body');
   if (!body) return;
-  // 记录本次渲染的签名：renderTabs 频繁触发 refreshSidePanel，签名一致就不再重绘（防闪烁）
+  // 签名带上标签实例 id：同类型多开时切标签必须重新渲染
   spLastKey = spState.surface === 'side'
-    ? `side|${currentTask?.id || ''}|${spChat.nodeId || ''}`
+    ? `side|${spActiveTabId || ''}|${currentTask?.id || ''}|${spChat.nodeId || ''}`
     : spState.surface === 'git'
-      ? `git|${currentTask?.id || ''}|${spState.gitFile || ''}`
-      : `${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
+      ? `git|${spActiveTabId || ''}|${taskIdForNode(activeTabId) || ''}|${spState.gitFile || ''}`
+      : spState.surface === 'browser'
+        ? `browser|${spActiveTabId || ''}`
+        : `${spActiveTabId || ''}|${activeTabId || ''}|${spState.surface || ''}|${spState.dir}|${spState.file || ''}`;
   if (spState.surface !== 'side') spUnmountSide();
+  if (spState.surface !== 'browser' || spLauncherShown) spParkBrowser();
   const node = currentPanelNode();
   spRenderTabs();
 
-  if (!spState.surface) return spRenderLauncher(body);
-  if (!node && spState.surface !== 'git') {
+  if (spLauncherShown || !spState.surface) return spRenderLauncher(body);
+  if (!node && spState.surface !== 'git' && spState.surface !== 'browser') {
     body.innerHTML = '<div class="sp-empty">先打开一个会话，面板会跟随当前会话</div>';
     return;
   }
@@ -198,6 +281,7 @@ async function spRender() {
     if (spState.surface === 'git') return await spRenderGit(body, node);
     if (spState.surface === 'diff') return await spRenderDiff(body, node);
     if (spState.surface === 'files') return await spRenderFiles(body, node);
+    if (spState.surface === 'browser') return await spRenderBrowser(body);
     if (spState.surface === 'context') return await spRenderContext(body, node);
     if (spState.surface === 'worktree') return await spRenderWorktree(body, node);
   } catch (err) {
@@ -209,8 +293,8 @@ function spRenderLauncher(body) {
   body.innerHTML = `
     <div class="sp-launcher">
       <h3 class="sp-launcher-title">打开面板</h3>
-      ${SP_ITEMS.map((it, i) => `
-        <button type="button" class="sp-item" data-sp="${it.id}" data-i="${i}" title="${escapeHtml(it.hint)}">
+      ${SP_ITEMS.filter((it) => !it.hidden).map((it) => `
+        <button type="button" class="sp-item" data-sp="${it.id}" title="${escapeHtml(it.hint)}">
           <span class="sp-item-icon">${icon(it.icon, 15)}</span>
           <span class="sp-item-label"><b>${escapeHtml(it.label)}</b><small>${escapeHtml(it.hint)}</small></span>
           <kbd class="sp-kbd">${it.key}</kbd>
@@ -223,7 +307,7 @@ function spRenderLauncher(body) {
 
 /* 键盘上下选择（对齐 T3 面板的手感） */
 document.addEventListener('keydown', (e) => {
-  if (!spState.open || spState.surface) return;
+  if (!spState.open || !(spLauncherShown || !spState.surface)) return;
   const body = $('sp-body');
   if (!body || !body.contains(document.activeElement) && document.activeElement !== body) return;
   const items = [...body.querySelectorAll('.sp-item')];
@@ -276,8 +360,10 @@ async function spRenderSide(body, node) {
     const label = newBtn.textContent;
     newBtn.textContent = '正在创建…';
     try {
-      const r = await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/side-chat`, { method: 'POST' });
-      await refreshTask();
+      const ownerId = taskIdForNode(node.id);
+      const r = await api(`/api/tasks/${ownerId}/nodes/${node.id}/side-chat`, { method: 'POST' });
+      if (ownerId === currentTask?.id) await refreshTask();
+      else { try { await ensureTaskDetail(ownerId); } catch { /* ignore */ } }
       spChat.nodeId = r.node.id;
       spLastKey = '';
       spRender();
@@ -739,8 +825,8 @@ async function spRenderFiles(body, node) {
 /* ---------- 上下文（标准视图：用量 + 文件 / 其他） ---------- */
 async function spRenderContext(body, node) {
   const [usageRes, filesRes] = await Promise.all([
-    api(`/api/tasks/${currentTask.id}/nodes/${node.id}/usage`).catch(() => ({ ctx: null })),
-    api(`/api/tasks/${currentTask.id}/nodes/${node.id}/context-files`).catch(() => ({ files: [] })),
+    api(`/api/tasks/${taskIdForNode(node.id)}/nodes/${node.id}/usage`).catch(() => ({ ctx: null })),
+    api(`/api/tasks/${taskIdForNode(node.id)}/nodes/${node.id}/context-files`).catch(() => ({ files: [] })),
   ]);
   const ctx = usageRes?.ctx || null;
   const files = filesRes?.files || [];
@@ -782,7 +868,7 @@ async function spRenderContext(body, node) {
     const btn = e.currentTarget;
     btn.disabled = true;
     try {
-      await api(`/api/tasks/${currentTask.id}/nodes/${node.id}/compact`, { method: 'POST', body: {} });
+      await api(`/api/tasks/${taskIdForNode(node.id)}/nodes/${node.id}/compact`, { method: 'POST', body: {} });
       toast('已在终端里执行 /compact');
     } catch (err) {
       toast(err.message);
@@ -792,18 +878,127 @@ async function spRenderContext(body, node) {
   });
 }
 
+/* ---------- 浏览器（每个标签一个独立视图；编程工具通过 CDP 接管） ----------
+   面板里这块区域是原生 WebContentsView（主进程按 tabId 创建、按这里报的矩形摆放）。
+   为什么不用 <webview>：实测它在 CDP /json/list 里是 type=webview，
+   Playwright / Playwright MCP / chrome-devtools-mcp / browser-use 都只认 type=page，
+   等于工具根本接管不到；WebContentsView 是 type=page，工具能正常连上控制。
+   支持多开：每个浏览器标签对应一个 tabId → 一个独立视图；切走只是隐藏（保活）。 */
+const browserUrlKey = (tabId) => `sbridge-browser-url:${tabId || 'default'}`;
+const browserBridge = () => (typeof window !== 'undefined' && window.sbridgeBrowser) || null;
+const browserSupported = () => !!browserBridge();
+let browserObserver = null;   // ResizeObserver：面板尺寸变化时重新报矩形
+let browserRaf = 0;
+let browserUrlBound = false;
+
+function spBrowserTabId() { return spActiveTabId || 'default'; }
+
+function spBrowserBounds() {
+  const host = document.querySelector('[data-br="host"]');
+  if (!host || !host.isConnected) return null;
+  if (document.getElementById('side-panel')?.hidden) return null;
+  const r = host.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return null;
+  return { x: r.x, y: r.y, width: r.width, height: r.height };
+}
+function spBrowserSyncBounds() {
+  browserRaf = 0;
+  const bridge = browserBridge();
+  if (!bridge) return;
+  bridge.layout(spBrowserTabId(), spBrowserBounds()).catch(() => {});
+}
+const spBrowserSchedule = () => { if (!browserRaf) browserRaf = requestAnimationFrame(spBrowserSyncBounds); };
+
+/** 面板不可见时隐藏原生视图（保活，不销毁）；不带 tabId = 全部隐藏 */
+function spParkBrowser() {
+  const bridge = browserBridge();
+  if (bridge) bridge.layout(null, null).catch(() => {});
+  if (browserObserver) { try { browserObserver.disconnect(); } catch { /* ignore */ } browserObserver = null; }
+}
+
+/** 关闭浏览器标签时销毁它的视图（页面状态不再需要） */
+function spDisposeBrowserTab(tabId) {
+  const bridge = browserBridge();
+  if (bridge) bridge.dispose(tabId).catch(() => {});
+  try { localStorage.removeItem(browserUrlKey(tabId)); } catch { /* ignore */ }
+}
+
+function spBrowserNavigate(input) {
+  const bridge = browserBridge();
+  if (!bridge) return;
+  const url = String(input || '').trim();
+  if (!url) return;
+  try { localStorage.setItem(browserUrlKey(spBrowserTabId()), url); } catch { /* ignore */ }
+  bridge.command(spBrowserTabId(), 'navigate', url).catch(() => {});
+}
+
+async function spRenderBrowser(body) {
+  const supported = browserSupported();
+  const tabId = spBrowserTabId();
+  const savedUrl = (() => { try { return localStorage.getItem(browserUrlKey(tabId)) || ''; } catch { return ''; } })();
+  body.innerHTML = `
+    <div class="sp-browser">
+      <div class="sp-browser-bar">
+        <button type="button" class="sp-browser-btn" data-br="back" title="后退">‹</button>
+        <button type="button" class="sp-browser-btn" data-br="fwd" title="前进">›</button>
+        <button type="button" class="sp-browser-btn" data-br="reload" title="刷新">${icon('refresh', 12)}</button>
+        <input class="sp-browser-url" data-br="url" placeholder="输入网址，回车打开" value="${escapeHtml(savedUrl)}" spellcheck="false" />
+        <button type="button" class="sp-browser-btn" data-br="open" title="用系统浏览器打开当前页">${icon('link', 12)}</button>
+      </div>
+      <div class="sp-browser-view" data-br="host">
+        ${supported ? '' : '<div class="sp-empty">内嵌浏览器只在桌面客户端里可用。</div>'}
+      </div>
+    </div>`;
+  const urlInput = body.querySelector('[data-br="url"]');
+  const bridge = browserBridge();
+  body.querySelector('[data-br="back"]')?.addEventListener('click', () => bridge?.command(tabId, 'back').catch(() => {}));
+  body.querySelector('[data-br="fwd"]')?.addEventListener('click', () => bridge?.command(tabId, 'forward').catch(() => {}));
+  body.querySelector('[data-br="reload"]')?.addEventListener('click', () => bridge?.command(tabId, 'reload').catch(() => {}));
+  body.querySelector('[data-br="open"]')?.addEventListener('click', () => bridge?.command(tabId, 'open-external').catch(() => {}));
+  urlInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); spBrowserNavigate(urlInput.value); } });
+  urlInput?.addEventListener('focus', () => urlInput.select());
+  if (!supported) return;
+
+  // 地址栏跟随页面导航（主进程推送，按 tabId 过滤）
+  if (!browserUrlBound) {
+    browserUrlBound = true;
+    bridge.onNavigate(({ tabId: from, url }) => {
+      if (from && from !== spBrowserTabId()) return;
+      const input = document.querySelector('[data-br="url"]');
+      if (input && url) input.value = url;
+    });
+    bridge.onTitle(({ tabId: from, title }) => {
+      if (from && from !== spBrowserTabId()) return;
+      const input = document.querySelector('[data-br="url"]');
+      if (input) input.title = title || '';
+    });
+  }
+  // 摆放本标签的原生视图，并在尺寸/位置变化时重新报矩形
+  spBrowserSchedule();
+  if (!browserObserver) browserObserver = new ResizeObserver(spBrowserSchedule);
+  const host = body.querySelector('[data-br="host"]');
+  if (host) { try { browserObserver.observe(host); } catch { /* ignore */ } }
+  try { browserObserver.observe(document.getElementById('side-panel')); } catch { /* ignore */ }
+  window.addEventListener('resize', spBrowserSchedule);
+  // 有上次地址且当前是空白页 → 恢复
+  if (savedUrl) bridge.command(tabId, 'state').then((st) => {
+    if (st?.ok && st.url === 'about:blank') spBrowserNavigate(savedUrl);
+  }).catch(() => {});
+}
+
 /* ---------- Git（项目级完整视图） ---------- */
 async function spRenderGit(body, node) {
   const q = spState.gitRefresh ? '?refresh=1' : '';
   spState.gitRefresh = false;
-  const data = await api(`/api/tasks/${currentTask.id}/project-state${q}`);
+  const ownerId = taskIdForNode(node.id);
+  const data = await api(`/api/tasks/${ownerId}/project-state${q}`);
   const p = data?.project;
   if (!p) {
     body.innerHTML = '<div class="sp-empty">这个任务还没有可扫描的工作目录</div>';
     return;
   }
-  // 顺手把侧栏顶部的 Git 胶囊刷新一下，保持同一份事实
-  if (currentTask) {
+  // 顺手把侧栏顶部的 Git 胶囊刷新一下，保持同一份事实（只在本会话属于当前任务时）
+  if (currentTask && ownerId === currentTask.id) {
     currentTask.project = {
       cwd: p.cwd, isGit: p.isGit, branch: p.branch, head: p.head, headAt: p.headAt,
       dirtyCount: p.dirtyCount, lastChangeAt: p.lastChangeAt,
@@ -816,7 +1011,7 @@ async function spRenderGit(body, node) {
   }
 
   if (spState.gitFile) {
-    const d = await api(`/api/tasks/${currentTask.id}/git-diff?cwd=${encodeURIComponent(p.cwd || '')}&path=${encodeURIComponent(spState.gitFile)}`);
+    const d = await api(`/api/tasks/${taskIdForNode(node.id)}/git-diff?cwd=${encodeURIComponent(p.cwd || '')}&path=${encodeURIComponent(spState.gitFile)}`);
     body.innerHTML = `
       <div class="sp-file-head">
         <button type="button" class="sp-link" data-git-back>← Git</button>
@@ -891,13 +1086,13 @@ async function spRenderGit(body, node) {
 
 /* ---------- Worktree ---------- */
 async function spRenderWorktree(body, node) {
-  const data = await api(`/api/tasks/${currentTask.id}/worktrees`);
+  const data = await api(`/api/tasks/${taskIdForNode(node.id)}/worktrees`);
   const info = (data.worktrees || []).find((w) => w.nodeId === node.id);
   if (!info) {
     body.innerHTML = `<div class="sp-empty">这个会话没有独立的 sbridge worktree<br /><span class="sp-dim">非 git 仓库，或创建会话时主工作区不干净</span></div>`;
     return;
   }
-  const base = `/api/tasks/${currentTask.id}/nodes/${node.id}/worktree-changes`;
+  const base = `/api/tasks/${taskIdForNode(node.id)}/nodes/${node.id}/worktree-changes`;
 
   // 单文件 diff：从这里能直接看 worktree 里改了什么（不只是状态数字）
   if (spState.wtFile) {
@@ -953,7 +1148,7 @@ async function spRenderWorktree(body, node) {
     const btn = e.currentTarget;
     btn.disabled = true;
     try {
-      await api(`/api/tasks/${currentTask.id}/worktrees/merge`, { method: 'POST', body: { nodeId: node.id } });
+      await api(`/api/tasks/${taskIdForNode(node.id)}/worktrees/merge`, { method: 'POST', body: { nodeId: node.id } });
       toast(`已合并 ${info.branch} → ${info.base}`);
       spLastKey = '';
       spRender();
@@ -969,11 +1164,8 @@ function initSidePanel() {
   $('btn-panel')?.addEventListener('click', () => toggleSidePanel());
   $('sp-close')?.addEventListener('click', () => toggleSidePanel(false));
   $('sp-add')?.addEventListener('click', () => {
-    spState.surface = null;
-    spState.dir = '';
-    spState.file = null;
-    spState.wtFile = null;
-    spState.gitFile = null;
+    // 显示启动列表（不销毁已有标签，只是暂不显示）
+    spLauncherShown = true;
     spLastKey = '';
     spRender();
   });

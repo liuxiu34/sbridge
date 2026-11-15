@@ -256,7 +256,7 @@ function openBoardMenu(nodeId, x, y) {
     { icon: 'split', label: '分屏打开', run: () => openInOtherSlot(node.id) },
     { icon: 'download', label: '导出 Markdown（只读）', run: () => exportNodeMarkdown(node) },
     /[\\/]\.sbridge-worktrees[\\/]/i.test(String(node.cwd || ''))
-      ? { icon: 'git', label: '在右侧面板查看 Worktree', run: () => { openSessionTab(node.id); openSidePanel('worktree'); } } : null,
+      ? { icon: 'git', label: '在右侧面板查看 Worktree', run: () => { openSessionTab(node.id); openSidePanel('worktree', { reuse: true }); } } : null,
     running ? { icon: 'stop', label: '停止终端', danger: true, run: () => stopNodeTerm(node) } : null,
     { icon: 'archive', label: `归档${boardSel.size > 1 ? `选中的 ${boardSel.size} 个会话` : '会话'}`, run: () => archiveTaskNodes([...boardSel]) },
     opened ? { icon: 'x', label: '关闭标签', run: () => closeTab(node.id) } : null,
@@ -429,7 +429,7 @@ function renderProjectChip() {
   el.classList.toggle('warn', external || p.dirtyCount > 0);
   el.innerHTML = icon('git', 13) + ' ' + escapeHtml(bits.join(' · '));
   el.title = `项目现状：${bits.join('，')}${p.lastChangeAt ? ` · 最近改动 ${fmtTime(p.lastChangeAt)}` : ''}\n不受工具限制：这里读的是工作区事实。点击在右侧面板看完整 Git（改动、diff、最近提交）`;
-  el.onclick = () => openSidePanel('git');
+  el.onclick = () => openSidePanel('git', { reuse: true });
 }
 
 // 每 30 秒轻量刷新一次项目现状（不刷新整个任务，避免开销）

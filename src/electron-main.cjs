@@ -17,6 +17,25 @@ let bootT0 = Date.now();
 
 const isPackaged = app.isPackaged;
 const IS_WIN = process.platform === 'win32';
+
+/* 内嵌浏览器 + 编程工具接管（借鉴 Playwright MCP / chrome-devtools-mcp / browser-use 的
+   「单实例 + CDP attach」做法）：桌面版开一个本地 CDP 端口，面板里的浏览器就是唯一实例；
+   pi/claude/codex 通过 --cdp-endpoint=http://127.0.0.1:9222 直接接管，不再各自启动浏览器。
+   端口默认 9222（与主流工具的默认约定一致），可用环境变量覆盖。
+   必须在 app ready 之前设置，之后无法再开。 */
+const CDP_PORT = Number(process.env?.SBRIDGE_CDP_PORT || 9222) || 9222;
+app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT));
+// 仅监听本机；Chrome 111+ 对 ws 连接校验 Origin，放行本机 CDP 客户端
+app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1');
+app.commandLine.appendSwitch('remote-allow-origins', '*');
+const CDP_URL = `http://127.0.0.1:${CDP_PORT}`;
+
+/* 面板浏览器用 WebContentsView，而不是 <webview>：
+   实测差别是决定性的——WebContentsView 在 CDP /json/list 里是 type=page，
+   Playwright / Playwright MCP / chrome-devtools-mcp / browser-use 才枚举得到、才能接管；
+   <webview> 是 type=webview，这些工具一律看不见（功能等于没做）。
+   页面只是宿主：渲染进程报上可见矩形，主进程按矩形摆放这个原生视图。 */
+const BROWSER_PARTITION = 'persist:sbridge-browser';
 // 服务程序：Windows 是 .exe，Linux/macOS 是 ELF/Mach-O 可执行文件
 const svcName = IS_WIN ? 'sbridge.exe' : 'sbridge';
 const svcExe = isPackaged
@@ -108,6 +127,10 @@ function startService() {
       ...process.env,
       SBRIDGE_DATA: path.join(app.getPath('appData'), 'sbridge', 'data'),
       SBRIDGE_NO_BROWSER: '1',
+      // 面板浏览器的接管地址：随服务进程继承给 pi/claude/codex，
+      // 工具侧用 Playwright MCP / browser-use 直接 attach，不必自带浏览器
+      SBRIDGE_CDP_URL: CDP_URL,
+      SBRIDGE_CDP_PORT: String(CDP_PORT),
       // 桌面版不复用别的 sbridge 实例：端口被占时自己换端口起新服务，
       // 避免连到一个使用其它数据目录（比如 dev）的旧实例。
       SBRIDGE_NO_REUSE: '1',
@@ -156,8 +179,85 @@ function waitForService(tries = 100) {
   });
 }
 
-function createWindow() {
-  win = new BrowserWindow({
+/* ---------------- 面板浏览器（WebContentsView，CDP 里是 type=page） ----------------
+   渲染进程通过 IPC 报告面板里那块占位区域的矩形，主进程把原生视图摆上去。
+   视图常驻不销毁：面板切走只是隐藏（setVisible(false)），页面与登录态都保留。
+   多个浏览器标签 = 多个视图，按 tabId 各自独立（同一 persist 分区，共享登录态）。 */
+const browserViews = new Map(); // tabId -> { view, shown }
+
+function ensureBrowserView(tabId) {
+  const key = String(tabId || 'default');
+  const hit = browserViews.get(key);
+  if (hit) return hit;
+  const { WebContentsView } = require('electron');
+  const view = new WebContentsView({
+    webPreferences: {
+      partition: BROWSER_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      // 浏览器面板里的页面是外部站点，禁止任何桥接能力
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  const wc = view.webContents;
+  wc.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  // 页面标题/地址变化回传渲染进程（地址栏同步）；带 tabId，多标签各认各的
+  const notify = (channel, payload) => { try { win?.webContents.send(channel, { tabId: key, ...payload }); } catch { /* ignore */ } };
+  wc.on('did-navigate', (_e, url) => notify('sbridge:browser-navigate', { url }));
+  wc.on('did-navigate-in-page', (_e, url) => notify('sbridge:browser-navigate', { url }));
+  wc.on('page-title-updated', (_e, title) => notify('sbridge:browser-title', { title }));
+  // 初始页给一个真实 URL：Playwright 的 connectOverCDP 会跳过 url 为空的 page target，
+  // 空白视图会让工具"看不见"这个浏览器。
+  wc.loadURL('about:blank').catch(() => {});
+  const entry = { view, shown: false };
+  browserViews.set(key, entry);
+  return entry;
+}
+
+function layoutBrowserView(tabId, bounds) {
+  if (!win || !tabId) return;
+  const key = String(tabId);
+  const entry = ensureBrowserView(key);
+  // 同一时刻只显示当前标签的视图：其余的隐藏（多开浏览器标签时避免叠在一起）
+  for (const [otherKey, other] of browserViews) {
+    if (otherKey !== key && other.shown) { try { other.view.setVisible(false); } catch { /* ignore */ } }
+  }
+  if (!bounds || bounds.width < 2 || bounds.height < 2) { hideBrowserView(key); return; }
+  if (!entry.shown) { win.contentView.addChildView(entry.view); entry.shown = true; }
+  // 渲染进程给的是 CSS 像素的视口坐标；WebContentsView 也用 DIP，可直接用
+  entry.view.setBounds({
+    x: Math.round(bounds.x), y: Math.round(bounds.y),
+    width: Math.round(bounds.width), height: Math.round(bounds.height),
+  });
+  entry.view.setVisible(true);
+}
+
+function hideBrowserView(tabId) {
+  if (!tabId) {
+    // 不带 tabId = 全部隐藏（面板整体收起/离开浏览器 surface）
+    for (const [key] of browserViews) hideBrowserView(key);
+    return;
+  }
+  const entry = browserViews.get(String(tabId));
+  if (!entry || !entry.shown) return;
+  try { entry.view.setVisible(false); } catch { /* ignore */ }
+}
+
+/** 关闭某个浏览器标签时销毁它的视图（页面状态不再需要） */
+function disposeBrowserView(tabId) {
+  const key = String(tabId);
+  const entry = browserViews.get(key);
+  if (!entry) return;
+  browserViews.delete(key);
+  try { win?.contentView.removeChildView(entry.view); } catch { /* ignore */ }
+  try { entry.view.webContents.close(); } catch { /* ignore */ }
+}
+
+function createWindow() {  win = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 980,
@@ -231,6 +331,42 @@ app.whenReady().then(async () => {
       });
       return r.canceled ? null : (r.filePaths[0] || null);
     } catch { return null; }
+  });
+  /* 面板浏览器（WebContentsView）：渲染进程报告可见矩形 → 主进程摆放原生视图。
+     bounds 为空/过小 = 面板不可见，隐藏但保活（页面与登录态保留）。 */
+  ipcMain.handle('sbridge:browser-layout', (_e, { tabId, bounds } = {}) => {
+    layoutBrowserView(tabId, bounds);
+    return { ok: true };
+  });
+  ipcMain.handle('sbridge:browser-dispose', (_e, { tabId } = {}) => {
+    disposeBrowserView(tabId);
+    return { ok: true };
+  });
+  ipcMain.handle('sbridge:browser-command', async (_e, { tabId, action, url } = {}) => {
+    const view = ensureBrowserView(tabId).view;
+    const wc = view.webContents;
+    try {
+      if (action === 'navigate' && url) {
+        let target = String(url).trim();
+        if (!/^[a-z][a-z0-9+.-]*:/i.test(target)) target = `https://${target}`;
+        await wc.loadURL(target);
+        return { ok: true, url: wc.getURL() };
+      }
+      if (action === 'back') { wc.navigationHistory.canGoBack() && wc.navigationHistory.goBack(); return { ok: true }; }
+      if (action === 'forward') { wc.navigationHistory.canGoForward() && wc.navigationHistory.goForward(); return { ok: true }; }
+      if (action === 'reload') { wc.reload(); return { ok: true }; }
+      if (action === 'open-external') { if (/^https?:/i.test(wc.getURL())) shell.openExternal(wc.getURL()); return { ok: true }; }
+      if (action === 'state') {
+        return {
+          ok: true,
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          canGoBack: wc.navigationHistory.canGoBack(),
+          canGoForward: wc.navigationHistory.canGoForward(),
+        };
+      }
+      return { ok: false, error: `未知动作 ${action}` };
+    } catch (err) { return { ok: false, error: String(err.message || err) }; }
   });
   createWindow();          // 立刻出闪屏，不用等后端
   startService();

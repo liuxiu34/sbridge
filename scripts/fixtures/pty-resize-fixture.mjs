@@ -17,7 +17,11 @@ const fs = require('node:fs');
 if (!process.stdout.isTTY) throw Error('Expected a real PTY');
 let line = 0;
 const timer = setInterval(() => {
-  for (let i = 0; i < 6 && line < 240; i++, line++) process.stdout.write('HISTORY_' + String(line).padStart(3, '0') + '\\r\\n');
+  for (let i = 0; i < 6 && line < 240; i++, line++) {
+    // 每隔 10 行插入一条超过终端宽度的长行，验证宽度变化时 xterm 软换行 reflow 的场景。
+    const text = (line > 0 && line % 10 === 0) ? 'LONG_' + 'x'.repeat(300) + '_' + line : 'HISTORY_' + String(line).padStart(3, '0');
+    process.stdout.write(text + '\\r\\n');
+  }
   if (line === 240) { clearInterval(timer); process.stdout.write('READY>'); }
 }, 15);
 process.stdin.setRawMode(true); process.stdin.resume();

@@ -239,7 +239,7 @@ async function heightCase(tool, route, legacy = false) {
     assert.equal(r.renderedHistoryChanged, true, 'legacy DOM renderer must display the jump');
     assert.equal(r.after.topLine, r.before.topLine, 'legacy must jump back on delayed redraw');
   } else {
-    assert.deepEqual(r.before.windowsPty, windowsPty, route + ' backend info before replay');
+    assert.equal(r.before.windowsPty.backend, 'winpty', route + ' must mark non-conpty to disable local reflow');
     assert.equal(r.fit.baseY, r.before.baseY, 'Windows fit must keep the screen base');
     assert.equal(r.pulledHistory, false, name + ' showed old history before repaint');
     assert.equal(r.renderedHistoryChanged, false, name + ' rendered an old history line before repaint');

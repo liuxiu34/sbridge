@@ -340,6 +340,36 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && resource === 'state') return json(res, 200, buildState(db));
 
+  /* 内嵌浏览器的接管信息：桌面版由 Electron 壳提供 CDP 端口（面板里的 WebContentsView
+     即唯一实例），编程工具通过它 attach，不再自带浏览器。
+     注意：只有壳注入了 SBRIDGE_CDP_URL 才算「可用」——Linux 纯服务端/dev 模式下 9222
+     可能被别的 Chromium（比如残留的调试实例）占着，只探端口会误报 enabled。 */
+  if (req.method === 'GET' && resource === 'browser') {
+    const port = Number(process.env.SBRIDGE_CDP_PORT || 9222) || 9222;
+    const cdpUrl = process.env.SBRIDGE_CDP_URL || `http://127.0.0.1:${port}`;
+    const managed = !!process.env.SBRIDGE_CDP_URL; // 由 Electron 壳托管的浏览器
+    let portOpen = false;
+    try {
+      const r = await fetch(`${cdpUrl}/json/version`, { signal: AbortSignal.timeout(1200) });
+      portOpen = r.ok;
+    } catch { /* 端口未开 */ }
+    return json(res, 200, {
+      enabled: managed && portOpen,
+      managed,
+      portOpen,
+      cdpUrl,
+      port,
+      toolArgs: {
+        playwrightMcp: `--cdp-endpoint=${cdpUrl}`,
+        chromeDevtoolsMcp: `--browser-url=${cdpUrl}`,
+        browserUse: `cdp_url='${cdpUrl}'`,
+      },
+      hint: managed
+        ? '面板里的浏览器就是唯一实例；工具侧用上面的参数接管，不要自己再启动浏览器。'
+        : '当前进程没有 Electron 壳托管的浏览器（仅桌面客户端可用），不要连这个端口——它可能是别的 Chromium。',
+    });
+  }
+
   /* 归档箱：所有被归档的会话（数据仍在任务里，恢复后回到原位） */
   if (req.method === 'GET' && resource === 'archive' && !id) {
     return json(res, 200, { items: store.listArchived(db) });

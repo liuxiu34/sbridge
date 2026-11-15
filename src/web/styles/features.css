@@ -988,6 +988,16 @@ pre.mermaid:not([data-processed]) {
 }
 .sp-back:hover { background: var(--hover-soft); color: var(--text); }
 .sp-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+/* 浏览器面板：占满面板高度；页面本体是主进程摆上来的原生 WebContentsView，
+   这里只留一块占位区域（它的矩形会被上报给主进程） */
+.sp-body:has(.sp-browser) { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.sp-browser { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sp-browser-bar { display: flex; align-items: center; gap: 4px; padding: 8px 10px 6px; flex: none; }
+.sp-browser-btn { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; }
+.sp-browser-btn:hover { background: var(--hover-soft); color: var(--text); }
+.sp-browser-url { flex: 1; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--text); font: 12px var(--font-ui); outline: none; }
+.sp-browser-url:focus { border-color: var(--accent); }
+.sp-browser-view { flex: 1; min-height: 0; display: flex; background: #fff; }
 .sp-loading,
 .sp-empty {
   padding: 18px 6px; font-size: 12.5px; color: var(--muted); line-height: 1.7;

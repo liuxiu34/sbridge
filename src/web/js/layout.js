@@ -8,7 +8,65 @@ let boardMode = false;    // 主区显示完整白板
 let boardSel = new Set(); // 白板框选中的会话 id（仅白板视图内生效）
 let layout = { mode: 'single', slots: [null, null], focused: 0 };
 
-function findNode(nodeId) { return currentTask?.nodes.find((n) => n.id === nodeId) || null; }
+/* ---------------- 跨任务会话（分屏不再限定同一任务） ----------------
+ * 整个前端以 currentTask 为「当前任务」，但分屏/标签要能承载其他任务的会话：
+ * 这里维护 taskId→任务详情、nodeId→taskId 两张索引，findNode 先查当前任务再查缓存。
+ * 任务详情只从 /api/tasks/:id 拿（node id 是 12 位随机 hex，全局唯一）。 */
+const taskCache = new Map();
+const nodeTask = new Map();
+function cacheTask(task) {
+  if (!task?.id) return task;
+  taskCache.set(task.id, task);
+  for (const n of task.nodes || []) nodeTask.set(n.id, task.id);
+  return task;
+}
+function taskForNode(nodeId) {
+  const tid = nodeTask.get(nodeId);
+  if (!tid) return null;
+  return tid === currentTask?.id ? currentTask : taskCache.get(tid) || null;
+}
+function taskIdForNode(nodeId) { return taskForNode(nodeId)?.id || nodeTask.get(nodeId) || currentTask?.id || null; }
+async function ensureTaskDetail(taskId) {
+  if (!taskId) return null;
+  if (taskId === currentTask?.id) return currentTask;
+  const hit = taskCache.get(taskId);
+  if (hit) return hit;
+  const detail = await api(`/api/tasks/${taskId}`);
+  return cacheTask(detail);
+}
+
+function findNode(nodeId) {
+  const own = currentTask?.nodes?.find((n) => n.id === nodeId);
+  if (own) return own;
+  return taskForNode(nodeId)?.nodes?.find((n) => n.id === nodeId) || null;
+}
+
+/* 聚焦会话属于别的任务时，把「当前任务」上下文切过去（侧栏会话链、白板、任务标题随之更新），
+   但绝不销毁已打开的面板/标签：会话视图的生命周期与任务切换解耦。
+   只做侧栏/白板的刷新，不调用 openTask()（那会重建面板）。 */
+let syncingTaskContext = null;
+function syncTaskContextTo(nodeId) {
+  const tid = nodeTask.get(nodeId);
+  if (!tid || !currentTask || tid === currentTask.id) return Promise.resolve();
+  const detail = taskCache.get(tid);
+  if (!detail) return Promise.resolve(); // 详情还没进来（跨任务首次打开），由 openSessionTabInTask 负责
+  currentTask = detail;
+  currentTaskId = tid;
+  if (syncingTaskContext === tid) return Promise.resolve();
+  syncingTaskContext = tid;
+  try {
+    if (typeof renderTree === 'function') renderTree();
+    if (typeof renderBoard === 'function') renderBoard();
+    const actions = $('task-actions');
+    if (actions) actions.hidden = false;
+    boardSel.clear();
+    if (typeof closeBoardMenu === 'function') closeBoardMenu();
+    // 侧栏会话链与 Git 胶囊跟当前任务走
+    if (typeof renderMiniChain === 'function') renderMiniChain();
+  } catch { /* 侧栏未初始化时忽略 */ }
+  syncingTaskContext = null;
+  return Promise.resolve();
+}
 
 function validTabIds() { return openTabs.filter((id) => findNode(id)); }
 function visiblePaneIds() {
@@ -44,6 +102,9 @@ function openSessionTab(nodeId, { activate = true, slot = null, split = false } 
   if (!findNode(nodeId)) return;
   if (!openTabs.includes(nodeId)) openTabs.push(nodeId);
   boardMode = false;
+  // 聚焦的会话属于别的任务时，让「当前任务」跟过去（侧栏会话链/白板随之切换），
+  // 但已打开的面板与标签一律保留——切任务不再销毁会话视图。
+  void syncTaskContextTo(nodeId);
   if (split) layout.mode = 'split';
   if (layout.mode === 'split') {
     const target = slot === 0 || slot === 1 ? slot : layout.focused;
@@ -73,6 +134,13 @@ function openSessionTab(nodeId, { activate = true, slot = null, split = false } 
   renderPanes();
 }
 
+/* 其他任务的会话：先把任务详情装进缓存，再走同一条打开路径（分屏/单栏都适用） */
+async function openSessionTabInTask(nodeId, taskId, opts = {}) {
+  if (!findNode(nodeId)) {
+    try { await ensureTaskDetail(taskId); } catch (err) { toast(err.message); return; }
+  }
+  openSessionTab(nodeId, opts);
+}
 function closeTab(nodeId) {
   const h = paneHandles.get(nodeId);
   if (h) { try { h.close(); } catch { /* ignore */ } paneHandles.delete(nodeId); }
@@ -119,8 +187,13 @@ function renderTabs() {
     const n = findNode(id);
     if (!n) return '';
     const run = nodeTermFor(n);
-    return `<div class="stab ${visible.includes(id) && !boardMode ? 'active' : ''} ${id === activeTabId && !boardMode ? 'focused' : ''}" data-tab="${id}" title="${escapeHtml(n.title || '')}">
+    const owner = taskForNode(id);
+    // 跨任务标签在标题前加任务名，防止两个任务里的同名会话混淆；任务名与会话名相同时不重复
+    const crossTask = owner && currentTask && owner.id !== currentTask.id;
+    const sameTitle = crossTask && String(owner.title || '') === String(n.title || '');
+    return `<div class="stab ${visible.includes(id) && !boardMode ? 'active' : ''} ${id === activeTabId && !boardMode ? 'focused' : ''}" data-tab="${id}" title="${escapeHtml(n.title || '')}${crossTask && !sameTitle ? ` · 任务：${escapeHtml(owner.title || '')}` : ''}">
       <span class="chip ${n.tool}">${toolLabel(n.tool)}</span>
+      ${crossTask && !sameTitle ? `<span class="stab-task">${escapeHtml(truncate(owner.title || '任务', 10))}</span>` : ''}
       <span class="stab-title">${escapeHtml(truncate(n.title || '(会话)', 22))}</span>
       ${run ? '<span class="run-dot"></span>' : ''}
       <button class="stab-x" data-close="${id}" title="关闭标签" aria-label="关闭 ${escapeHtml(n.title || '会话')}">${icon('x', 11)}</button>
@@ -168,10 +241,19 @@ function renderPanes() {
       host.dataset.paneHost = id;
       host.className = 'pane-host';
       area.appendChild(host);
-      paneHandles.set(id, createSessionPane(host, node, { active: true }));
+      paneHandles.set(id, createSessionPane(host, node, { active: true, taskId: taskIdForNode(id) }));
     }
     host.hidden = !visible.includes(id);
     host.classList.toggle('focused', id === activeTabId && !boardMode);
+    // 所属任务标记：面板会话不在当前任务下时显示（切任务后仍能看出这栏来自哪里）
+    const taskEl = host.querySelector('[data-role="panetask"]');
+    if (taskEl) {
+      const owner = taskForNode(id);
+      const cross = owner && currentTask && owner.id !== currentTask.id;
+      taskEl.hidden = !cross;
+      taskEl.textContent = cross ? (owner.title || '其他任务') : '';
+      taskEl.title = cross ? `所属任务：${owner.title || ''}` : '';
+    }
   }
   // flex 顺序必须跟 slots 一致；openTabs 的创建顺序不能决定左右位置。
   const ordered = [...visible, ...openTabs.filter((id) => !visible.includes(id))];
@@ -217,10 +299,6 @@ function setFocusedPane(nodeId) {
 
 function openInOtherSlot(nodeId) {
   if (!findNode(nodeId)) return;
-  if (!currentTask || currentTask.nodes.length < 2) {
-    toast('当前任务至少要有两个会话才能分屏');
-    return;
-  }
   const existing = layout.slots.indexOf(nodeId);
   if (existing !== -1) {
     setFocusedPane(nodeId);
@@ -232,7 +310,22 @@ function openInOtherSlot(nodeId) {
   openSessionTab(nodeId, { slot: target, split: true });
 }
 
-function toggleSplit(force) {
+/* 其他任务里「最近更新」的一个会话，作为分屏右侧候选（当前任务不够用时兜底） */
+async function pickRemoteSplitNode(excludeId) {
+  const others = (state.tasks || [])
+    .filter((t) => t.id !== currentTask?.id && (t.nodeCount ?? 1) > 0)
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  for (const t of others) {
+    try {
+      const detail = await ensureTaskDetail(t.id);
+      const nodes = (detail?.nodes || []).filter((n) => n.id !== excludeId);
+      if (nodes.length) return nodes[nodes.length - 1];
+    } catch { /* 换下一个任务 */ }
+  }
+  return null;
+}
+
+async function toggleSplit(force) {
   const enable = force !== undefined ? force : layout.mode !== 'split';
   if (!enable) {
     layout.mode = 'single';
@@ -243,14 +336,12 @@ function toggleSplit(force) {
     renderPanes();
     return;
   }
-  if (!currentTask || currentTask.nodes.length < 2) {
-    toast('当前任务至少要有两个会话才能分屏');
-    return;
-  }
-  const fallback = currentTask.nodes[currentTask.nodes.length - 1];
-  const leftNode = findNode(layout.slots[0] || activeTabId || openTabs[0]) || fallback;
-  const candidates = currentTask.nodes.filter((n) => n.id !== leftNode.id);
-  const rightNode = candidates.find((n) => n.tool !== leftNode.tool) || candidates[0];
+  const leftNode = findNode(layout.slots[0] || activeTabId || openTabs[0]) || currentTask?.nodes?.at(-1) || null;
+  if (!leftNode) { toast('先在左侧打开一个会话，再开分屏'); return; }
+  // 右侧候选：同任务优先（不同工具更佳），当前任务没有第二个会话就退到其他任务最近的会话
+  const ownCandidates = (currentTask?.nodes || []).filter((n) => n.id !== leftNode.id);
+  let rightNode = ownCandidates.find((n) => n.tool !== leftNode.tool) || ownCandidates[0] || null;
+  if (!rightNode) rightNode = await pickRemoteSplitNode(leftNode.id);
   if (!rightNode) {
     toast('没有可放到另一侧的会话');
     return;
@@ -260,7 +351,33 @@ function toggleSplit(force) {
   layout.slots[1] = null;
   layout.focused = 0;
   if (!openTabs.includes(leftNode.id)) openTabs.push(leftNode.id);
-  openSessionTab(rightNode.id, { slot: 1, split: true });
+  await openSessionTabInTask(rightNode.id, taskIdForNode(rightNode.id), { slot: 1, split: true });
+}
+
+/* 分屏右侧下拉：按任务分组列出所有任务的会话（其他任务详情按需拉取） */
+let splitOptionsLoading = false;
+const splitOptionsTried = new Set(); // 拉取失败的任务不再重试，避免下拉反复请求
+function splitTaskList() {
+  const list = [];
+  if (currentTask) list.push(currentTask);
+  for (const t of state.tasks || []) {
+    if (t.id === currentTask?.id) continue;
+    list.push(taskCache.get(t.id) || t);
+  }
+  return list;
+}
+async function loadSplitOptions() {
+  if (splitOptionsLoading || layout.mode !== 'split' || boardMode) return;
+  const pending = (state.tasks || []).filter((t) => t.id !== currentTask?.id && !taskCache.has(t.id) && (t.nodeCount ?? 1) > 0 && !splitOptionsTried.has(t.id));
+  if (!pending.length) return;
+  splitOptionsLoading = true;
+  try {
+    for (const t of pending) {
+      splitOptionsTried.add(t.id);
+      try { await ensureTaskDetail(t.id); } catch { /* 该任务稍后可在任务列表里打开 */ }
+    }
+  } finally { splitOptionsLoading = false; }
+  updateSplitControls();
 }
 
 function updateSplitControls() {
@@ -275,9 +392,16 @@ function updateSplitControls() {
   wrap.hidden = !isSplit || boardMode;
   if (!isSplit || !currentTask) return;
   const left = layout.slots[0];
-  const options = currentTask.nodes.filter((n) => n.id !== left);
-  select.innerHTML = options.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(`${toolLabel(n.tool)} · ${truncate(n.title || '(会话)', 24)}`)}</option>`).join('');
+  const groups = splitTaskList().map((t) => {
+    const nodes = (t.nodes || []).filter((n) => n.id !== left);
+    if (!nodes.length) return '';
+    return `<optgroup label="${escapeHtml(t.title || '任务')}">${nodes.map((n) =>
+      `<option value="${escapeHtml(n.id)}">${escapeHtml(`${toolLabel(n.tool)} · ${truncate(n.title || '(会话)', 24)}`)}</option>`).join('')}</optgroup>`;
+  }).join('');
+  const pendingCount = (state.tasks || []).filter((t) => t.id !== currentTask?.id && !taskCache.has(t.id) && (t.nodeCount ?? 1) > 0 && !splitOptionsTried.has(t.id)).length;
+  select.innerHTML = groups || (pendingCount ? '<option value="">正在读取其他任务的会话…</option>' : '<option value="">没有其他会话</option>');
   select.value = layout.slots[1] || '';
+  if (pendingCount) void loadSplitOptions();
 }
 
 /* 侧栏迷你会话链（白板收敛到侧栏的形态）

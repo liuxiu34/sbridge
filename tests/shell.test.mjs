@@ -10,6 +10,7 @@ test('托盘退出等待后台清理，重复退出不会跳过清理', async ()
   const app = {
     isPackaged: false, whenReady: () => new Promise(() => {}), on: (event, handler) => { handlers[event] = handler; },
     getLoginItemSettings: () => ({}), getPath: () => '.',
+    commandLine: { appendSwitch() {} },
     quit() { const event = { prevented: false, preventDefault() { this.prevented = true; } }; events.push(event); handlers['before-quit'](event); },
     exit: (code) => calls.push(['exit', code]),
   };
@@ -21,7 +22,7 @@ test('托盘退出等待后台清理，重复退出不会跳过清理', async ()
       if (name === 'node:path') return path;
       throw Error(name);
     },
-    __dirname: process.cwd(), process: { platform: 'win32' }, console: { log() {} }, AbortSignal,
+    __dirname: process.cwd(), process: { platform: 'win32', env: {} }, console: { log() {} }, AbortSignal,
     fetch(url) { calls.push(['shutdown', url]); return new Promise((r) => { finishShutdown = r; }); },
   });
   vm.runInContext(fs.readFileSync('src/electron-main.cjs', 'utf8') + '\nsvc={pid:12345};createTray();', context);

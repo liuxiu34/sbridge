@@ -14,6 +14,8 @@ const snapshot = t => {
   return { baseY: b.baseY, viewportY: b.viewportY, topLine: b.getLine(b.viewportY).translateToString(true) };
 };
 const history = Array.from({ length: 240 }, (_, i) => `HISTORY_${String(i).padStart(3, '0')}\r\n`).join('') + 'READY>';
+// mountTerm 内部的重绘缓冲窗是否待 flush（与 term.js 的 pendingTimer 常量保持同步的判定）
+const pendingBufferActive = (t) => t.options.windowsPty?.backend === 'winpty';
 
 test('真实 xterm：ConPTY 增高在延迟重绘前不拉回历史，缺失 metadata 的对照能复现跳变', async () => {
   // 无 DOM renderer 的核心回归；可见帧验收由 verify-resize-continuity.cjs 执行。
@@ -120,11 +122,13 @@ test('真实 mountTerm：创建 / 列表重挂 / POST 复用在回放前应用 m
     const ws = sockets[0];
     const send = async text => {
       ws.onmessage({ data: text });
-      // mountTerm 先在 Promise 链里排队，再由 xterm 的异步解析队列写入。
-      await new Promise(resolve => setTimeout(resolve, 30));
+      // mountTerm 先在 Promise 链里排队，再由 xterm 的异步解析队列写入；
+      // refit 开启的 160ms 重绘缓冲窗也要等它关闭（flushPending 落屏）。
+      await new Promise(resolve => setTimeout(resolve, 30 + (pendingBufferActive(t) ? 180 : 0)));
     };
     try {
-      assert.deepEqual(t.options.windowsPty, windowsPty, route + ' metadata must precede replay');
+      assert.equal(t.options.windowsPty.backend, 'winpty', route + ' must mark non-conpty to disable local reflow');
+      assert.equal(t.options.windowsPty.buildNumber, windowsPty.buildNumber, route + ' must preserve buildNumber');
       assert.equal(calls.length, route === 'list' ? 0 : 1);
       ws.onopen();
       assert.equal(ws.sent.length, route === 'reuse' ? 1 : 0, route + ' notify only if the returned PTY geometry differs');

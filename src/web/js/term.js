@@ -50,9 +50,21 @@ function nodeTermFor(node) {
 } 
 function boundRunningTerm(node) { return nodeTermFor(node); }
 
+/* ConPTY 与 xterm 的本地 reflow 存在 1 行偏差：宽度变化（最大化/拖宽）时，xterm 会先在
+   fit.fit() 里同步重排出一份「旧一行」的中间态，随后 ConPTY 的权威重绘（重发可见屏原始行）
+   又纠正回来，用户因此看到「先上滚一下再滚回底部」。把 backend 标为非 conpty，可关闭 xterm
+   本地 reflow 与 Windows wrapping heuristics，让 ConPTY 重绘作为唯一权威来源，消除中间跳变。
+   POSIX / 未知后端保持默认行为。 */
+function xtermPtyOption(p) {
+  if (p && p.backend === 'conpty') return { ...p, backend: 'winpty' };
+  return p || {};
+}
+
 /* 把原始终端挂进指定容器（面板「⌨」切换用；agent 进程挂在服务上，关页面不中断） */
 async function mountTerm(hostEl, node, retries = 0, hooks = {}) {
-  const taskId = currentTask.id;
+  // 跨任务分屏：终端服务的任务归属跟着会话走，不能假定是 currentTask
+  const ownerTaskId = () => hooks?.taskId || (typeof taskIdForNode === 'function' ? taskIdForNode(node.id) : null) || currentTask.id;
+  const taskId = ownerTaskId();
   const startedAt = performance.now();
   const viewEl = hostEl.closest('.term-view');
   const loadingEl = viewEl?.querySelector('[data-role="termloading"]');
@@ -67,7 +79,7 @@ async function mountTerm(hostEl, node, retries = 0, hooks = {}) {
     fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace',
     fontSize: 15, lineHeight: 1.2, fontWeight: 'normal', fontWeightBold: 'bold', letterSpacing: 0,
     cursorBlink: true, scrollback: 5000, theme: theme.xtermTheme(),
-    windowsPty: term?.windowsPty || {},
+    windowsPty: xtermPtyOption(term?.windowsPty),
   });
   const fit = new FitAddon.FitAddon();
   t.loadAddon(fit);
@@ -95,7 +107,7 @@ async function mountTerm(hostEl, node, retries = 0, hooks = {}) {
   }
   // 必须在 WS 回放前应用真实 PTY 信息：未知后端增高会先拉回历史，再被 ConPTY 重画。
   // 新建 / POST 复用时只能等响应；此时 xterm 尚未写入数据。POSIX 保留默认行为。
-  t.options.windowsPty = term.windowsPty || {};
+  t.options.windowsPty = xtermPtyOption(term.windowsPty);
   nodeTermBindings.set(node.id, term.id);
   theme.liveTerms.add(t);
   window.__sbTerms = window.__sbTerms || new Set();
@@ -165,6 +177,13 @@ async function mountTerm(hostEl, node, retries = 0, hooks = {}) {
         if (shouldFollow) t.scrollToBottom();
         else if (anchor && !anchor.isDisposed) t.scrollToLine(anchor.line);
       }
+      if (changed && ws.readyState === 1) {
+        // ConPTY 即将按新宽度重发可见屏与回滚历史：开缓冲窗把这段重绘攒成一次写入，
+        // 不让「重画到一半」的中间帧上屏（用户看到的冒顶再滑底）。
+        clearTimeout(pendingTimer);
+        pendingData = '';
+        pendingTimer = setTimeout(flushPending, RESIZE_BUFFER_MS);
+      }
     } finally { anchor?.dispose(); resizing = false; followBottom = shouldFollow; }
     scheduleScrollUi();
   };
@@ -189,6 +208,26 @@ async function mountTerm(hostEl, node, retries = 0, hooks = {}) {
     }).catch(() => {});
     return writeChain;
   };
+  /* ConPTY 宽度重排的「补帧」治理：宽度变化（最大化/拖宽）时 ConPTY 会按新宽度把
+     可见屏与回滚历史重发一遍（光标复位 + 逐行重画）。这段数据若照常流式写入，
+     xterm 会把「重画到一半」的中间帧上屏——用户看到上面的对话涌出来再滑回底部。
+     对策：resize 通知发出后开一个短暂缓冲窗，期间 WS 数据只攒不写；静默期一过
+     （ConPTY 重绘结束）一次性交给 writeBig，中间帧永远不落屏。正常输出不受影响
+     （窗口只在我们刚发过 resize 时才开启）。 */
+  const RESIZE_BUFFER_MS = 160;
+  let pendingData = '', pendingTimer = 0;
+  const flushPending = () => {
+    pendingTimer = 0;
+    if (!pendingData || termDisposed) { pendingData = ''; return; }
+    const chunk = pendingData; pendingData = '';
+    writeBig(chunk);
+  };
+  const bufferOrWrite = (data) => {
+    if (!pendingTimer) { writeBig(data); return; }
+    pendingData += data;
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(flushPending, RESIZE_BUFFER_MS);
+  };
   ws.onmessage = (e) => {
     const data = String(e.data).replaceAll('\u0000REPLAY_DONE\u0000', '');
     if (!data || termDisposed) return;
@@ -199,7 +238,7 @@ async function mountTerm(hostEl, node, retries = 0, hooks = {}) {
       clearTimeout(dialogTimer);
       dialogTimer = setTimeout(() => { dialogReported = false; hooks.onTuiDialog?.(false); }, 15000);
     }
-    writeBig(data);
+    bufferOrWrite(data);
   };
   t.onData(d => { if (ws.readyState === 1) ws.send(d); });
   ws.onclose = () => {
@@ -272,7 +311,7 @@ async function mountTerm(hostEl, node, retries = 0, hooks = {}) {
       resizeObserver.disconnect();
       viewEl?.removeEventListener('wheel', wheelHandler, true);
       window.removeEventListener('resize', scheduleResize);
-      clearTimeout(resizeTimer); clearTimeout(dialogTimer); clearTimeout(reconnectTimer);
+      clearTimeout(resizeTimer); clearTimeout(dialogTimer); clearTimeout(reconnectTimer); clearTimeout(pendingTimer);
       if (scrollUiFrame) cancelAnimationFrame(scrollUiFrame);
       scrollListener.dispose(); renderListener.dispose(); writeParsedListener.dispose();
       ws.close(); t.dispose();
@@ -293,7 +332,8 @@ const nodeTuiHandlers = new Map(); // nodeId → TUI 对话框回调（工作轨
 // 发给 B 的消息会串进 A 的终端（B 的会话文件里没有，重开后内容凭空消失）。
 // 节点级绑定：node.termId 有值优先用；没有就为该节点新起专属 PTY 并记录。
 const nodeTermBindings = new Map(); // nodeId -> termId
-async function sendToAgent(node, text) {
+async function sendToAgent(node, text, taskId = null) {
+  const ownerTaskId = taskId || (typeof taskIdForNode === 'function' ? taskIdForNode(node.id) : null) || currentTask.id;
   let termId = nodeTermBindings.get(node.id) || node.termId || null;
   let term = termId ? (state.terms || []).find((x) => x.id === termId && x.running) : null;
   if (!term) {
@@ -303,7 +343,7 @@ async function sendToAgent(node, text) {
     if (owned) { term = owned; termId = owned.id; }
   }
   if (!term) {
-    const r = await api(`/api/tasks/${currentTask.id}/term`, {
+    const r = await api(`/api/tasks/${ownerTaskId}/term`, {
       method: 'POST',
       body: { tool: node.tool, cwd: node.cwd || undefined, resumeCommand: node.resumeCommand || undefined, file: node.file || undefined, label: toolLabel(node.tool), nodeId: node.id },
     });

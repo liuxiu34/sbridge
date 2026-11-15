@@ -520,6 +520,7 @@ const ICONS = {
   download: '<path d="M12 3v12"/><path d="M7 10.5 12 15.5l5-5"/><path d="M4 20h16"/>', // 导出
   refresh: '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/>',              // 刷新/重新检查
   panel: '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M14.6 4.5v15" opacity=".55"/><path d="M17.4 8.6h1.6M17.4 11.4h1.6" opacity=".8"/>', // 右侧面板
+  browser: '<circle cx="12" cy="12" r="8.6"/><path d="M3.4 12h17.2"/><path d="M12 3.4c2.4 2.4 3.6 5.4 3.6 8.6s-1.2 6.2-3.6 8.6c-2.4-2.4-3.6-5.4-3.6-8.6s1.2-6.2 3.6-8.6z"/>', // 浏览器：地球
   diff: '<path d="M8 4v12"/><circle cx="8" cy="18.5" r="2"/><circle cx="16" cy="5.5" r="2"/><path d="M16 7.5v6a4 4 0 0 1-4 4h-2"/>', // 改动对比
   arrowUp: '<path d="M12 19V5"/><path d="M6 11l6-6 6 6"/>',                          // 发送
   chevronDown: '<path d="M6 9.5l6 6 6-6"/>',                                          // 下拉

@@ -87,6 +87,9 @@
 .stab.active { color: var(--text); }
 .stab.focused { border-bottom-color: var(--accent); background: color-mix(in srgb,var(--accent-soft) 38%,transparent); }
 .stab .chip { font-size: 9px; padding: 2px 5px; }
+/* 跨任务标签：任务名以低对比胶囊区分，同任务标签不受影响 */
+.stab-task { font-size: 9px; line-height: 1; padding: 2px 5px; border-radius: 4px; background: var(--pill-soft); color: var(--muted); max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+.stab.focused .stab-task { color: var(--text); }
 .stab-title { font-size: 11px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
 .stab-x { display: grid; place-items: center; width: 18px; height: 18px; border: 0; background: transparent; color: var(--muted); border-radius: 4px; padding: 0; }
 .stab-x:hover { background: var(--line); color: var(--text); }
@@ -100,6 +103,9 @@
 .session-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; overflow: hidden; background: var(--panel); container-type: inline-size; }
 .pane-head { display: flex; flex: none; align-items: center; gap: 10px; padding: 14px 22px 10px; min-width: 0; min-height: 55px; }
 .pane-caption { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 550; }
+/* 面板所属任务：仅在面板会话不属于「当前任务」时显示（切任务后仍能辨认来源） */
+.pane-task { flex: none; font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 5px; background: var(--pill-soft); color: var(--muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-host.focused .pane-task { color: var(--text); }
 .pane-head > .chip { display: none; }
 .pane-status { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100px; }
 .pane-tools { display: flex; align-items: center; gap: 7px; flex: none; }
@@ -126,7 +132,9 @@
 .chat-msg { display: flex; flex-direction: column; align-items: stretch; min-width: 0; margin: 10px 0 18px; }
 .chat-msg.is-user { align-items: flex-end; margin: 4px 0 24px; }
 .chat-bubble { min-width: 0; max-width: 100%; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
-.chat-msg.is-user .chat-bubble { max-width: 88%; background: var(--pill-soft); border: 1px solid var(--line); padding: 12px 16px; border-radius: 14px 14px 4px 14px; }
+.chat-msg.is-user .chat-bubble { max-width: 88%; background: var(--pill-soft); border: 1px solid var(--line); padding: 12px 16px; border-radius: 14px 14px 4px 14px; margin-left: auto; }
+/* 长用户消息：外层 .chat-msg-body 会被撑满整行，只有气泡自己 margin-left:auto 才能保证右贴
+   （否则气泡在整行内从左排起，看起来像左对齐） */
 .chat-msg.is-assistant .chat-bubble { padding: 0; color: var(--text); }
 .chat-msg .sev-text p { margin: 0 0 12px; }
 .chat-msg .sev-text h3, .chat-msg .sev-text h4, .chat-msg .sev-text h5, .chat-msg .sev-text h6 { color: var(--text); font-weight: 600; margin: 22px 0 10px; border: 0; }
