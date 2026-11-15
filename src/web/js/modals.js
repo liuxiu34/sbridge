@@ -838,7 +838,7 @@ function openApiConfigModal() {
     }
     if ($('api-hint')) {
       $('api-hint').innerHTML = `只接管 ${escapeHtml(toolLabel(tool))} 的模型接入配置；Claude Code / Codex 用它们自己的订阅登录，这里不动。`
-        + ` · <a href="#" id="api-copy" style="color:var(--accent)">从 ${tool === 'pi' ? 'OMP' : 'Pi'} 复制一份</a>`;
+        + ` · <a href="#" id="api-copy" style="color:var(--accent)">从 ${tool === 'pi' ? 'omp' : 'Pi'} 复制一份</a>`;
       $('api-copy')?.addEventListener('click', async (e) => {
         e.preventDefault();
         const other = tool === 'pi' ? 'omp' : 'pi';

@@ -90,7 +90,7 @@ export function createExecutionDriver(hooks, { makeProcess = (tool, args, opts) 
         stderrTail: rec.is_error ? String(rec.result || rec.errors?.join('\n') || 'Claude 执行失败') : '' });
     } else if (node.tool === 'omp') {
       if (rec.type === 'response') {
-        settleReply(rec.id, rec.data, rec.success === false ? rec.error || 'OMP 请求失败' : null);
+        settleReply(rec.id, rec.data, rec.success === false ? rec.error || 'omp 请求失败' : null);
         if (rec.id === ompPromptId && rec.success && rec.data?.agentInvoked === false) {
           ompOutcome = { exitCode: 0 }; ompSettled = true; completeOmp();
         }
@@ -100,7 +100,7 @@ export function createExecutionDriver(hooks, { makeProcess = (tool, args, opts) 
       } else if (rec.type === 'agent_start') {
         ompSettled = false; hooks.onTurnStarted?.();
       } else if (rec.type === 'message_end' && rec.message?.role === 'assistant') {
-        lastError = rec.message.stopReason === 'error' ? rec.message.errorMessage || 'OMP 执行失败' : '';
+        lastError = rec.message.stopReason === 'error' ? rec.message.errorMessage || 'omp 执行失败' : '';
       } else if (rec.type === 'prompt_result' && rec.id === ompPromptId) {
         ompOutcome = { exitCode: rec.status === 'completed' ? 0 : rec.status === 'aborted' ? -2 : 1,
           canceled: rec.status === 'aborted', stderrTail: rec.error?.message || '' };
