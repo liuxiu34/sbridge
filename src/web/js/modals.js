@@ -78,7 +78,11 @@ function newSessionFlow(defaultCwd = '') {
       <label class="hint" style="display:flex;align-items:center;gap:6px;margin-top:6px;color:#9a9aa4;cursor:pointer">
         <input type="checkbox" id="ns-worktree" checked /> 在 git worktree 里隔离（干净仓库才生效，否则直接用上面的目录）
       </label>
-      <div class="hint" id="ns-status" style="color:#9a9aa4;margin-top:10px">会启动一个内嵌终端的新会话；等它落盘后自动接入本任务。</div>`,
+      <div class="hint" id="ns-status" style="color:#9a9aa4;margin-top:10px">会启动一个内嵌终端的新会话；等它写出会话文件后自动接入本任务（通常几秒，首次启动要过向导的工具会久一些）。</div>
+      <div id="ns-term-preview" hidden style="margin-top:10px">
+        <div class="hint" style="color:#9a9aa4;margin-bottom:4px">终端正在显示（只读预览）：</div>
+        <pre id="ns-term-tail" style="max-height:150px;overflow:auto;margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#101312;color:#b9c9c0;font:11px var(--mono);white-space:pre-wrap;word-break:break-all"></pre>
+      </div>`,
     submitLabel: '启动',
     onSubmit: async () => {
       const cwd = $('ns-cwd').value.trim();
@@ -90,14 +94,49 @@ function newSessionFlow(defaultCwd = '') {
         body: { tool, cwd, worktree: useWt, embed: true },
       });
       if (!r.ok) throw new Error(r.error || '启动失败');
+      // 终端在服务端后台跑：把它的输出回显到弹窗里，用户能看到是否卡在向导/首屏
+      const launchedTermId = r.termId || null;
+      const previewEl = $('ns-term-preview');
+      const tailEl = $('ns-term-tail');
+      if (launchedTermId && previewEl) previewEl.hidden = false;
+      const stripAnsi = (t) => {
+        // 去掉 CSI / OSC 控制序列与回车，只留可读文本（终端预览用）
+        const ESC = String.fromCharCode(27);
+        const BEL = String.fromCharCode(7);
+        const csi = new RegExp(ESC + '\\[[0-9;?]*[a-zA-Z]', 'g');
+        const osc = new RegExp(ESC + '\\][^' + BEL + ESC + ']*(?:' + BEL + '|' + ESC + '\\\\)', 'g');
+        return String(t || '').replace(csi, '').replace(osc, '').replace(/\r/g, '');
+      };
+      const refreshTail = async () => {
+        if (!launchedTermId || !tailEl) return;
+        try {
+          const d = await api(`/api/terms?tail=${encodeURIComponent(launchedTermId)}`);
+          const text = stripAnsi(d.tail || '').trim();
+          if (text) {
+            tailEl.textContent = text.slice(-1200);
+            tailEl.scrollTop = tailEl.scrollHeight;
+          }
+        } catch { /* 忽略 */ }
+      };
       // 轮询找这个目录下该工具的新会话文件（最多 90s；claude 要等第一条消息落盘）
-      $('ns-status').textContent = '会话已启动，等它落盘后自动接入…（可以先在终端里说第一句话）';
+      const startedAt = Date.now();
+      const setStatus = (text) => {
+        const el = $('ns-status');
+        if (el) el.textContent = text;
+      };
       const knownFiles = new Set();
       try { (await api(`/api/available?tool=${tool}&all=1`)).items?.forEach((s) => knownFiles.add(s.file)); } catch { /* 空=首会话也能识别 */ }
-      const deadline = Date.now() + 90_000;
+      const deadline = startedAt + 90_000;
       let attached = false;
+      let waited = 0;
+      setTimeout(() => { void refreshTail(); }, 1200);
       while (Date.now() < deadline && !attached) {
+        // 明确告诉用户「在等什么、等了多久、还能等多久、现在该做什么」
+        waited = Math.round((Date.now() - startedAt) / 1000);
+        setStatus(`已启动，正在等它写出会话文件… 已等 ${waited}s / 最多 90s。` +
+          (waited >= 6 ? ' 如果终端里还停在欢迎页或向导，先在终端按提示走完（或直接说一句话），落盘后会自动接入。' : ''));
         await new Promise((res) => setTimeout(res, 2000));
+        void refreshTail();
         let items = [];
         try { items = (await api(`/api/available?tool=${tool}&all=1`)).items || []; } catch { continue; }
         const fresh = items
@@ -124,7 +163,12 @@ function newSessionFlow(defaultCwd = '') {
         else if (r.worktree?.reason) toast(`仓库不干净，直接用 ${cwd}`);
         else toast('新会话已接入本任务');
       }
-      if (!attached) throw new Error('90 秒内没等到会话文件。先在终端里说一句（比如「你好」），再点「接入已有会话」选它。');
+      if (!attached) {
+        const extra = tool === 'omp'
+          ? 'omp 首次启动可能要过向导；请先在终端里完成向导并说一句话，再点「接入已有会话」选它。'
+          : '请先在终端里说一句话（比如「你好」），再点「接入已有会话」选它。';
+        throw new Error(`等了 ${waited} 秒仍未检测到会话文件（${tool}）。${extra}`);
+      }
     },
   });
   // 目录选择：桌面版走系统目录框（preload pickDir），浏览器降级走 Chromium File System API；都没有就手输

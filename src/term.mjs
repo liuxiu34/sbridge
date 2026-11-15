@@ -80,6 +80,14 @@ export function tailTextForNode(nodeId, maxChars = 16000) {
   return best.buffer.join('').slice(-maxChars);
 }
 
+/** 某个终端最近输出的原文（含控制序列，调用方自行清洗）：新开会话时终端在后台跑，
+ *  前端靠这个把向导/首屏状态回显给用户，而不是让用户干等会话文件落盘。 */
+export function termTail(id, maxChars = 4000) {
+  const t = terms.get(String(id || ''));
+  if (!t) return '';
+  return (t.buffer || []).join('').slice(-maxChars);
+}
+
 /** 启动一个内嵌终端；command 为完整命令行（如 `claude --resume <id>` 或 `codex`）
  *  replay 为显示层历史回放（transcript.mjs 生成）：只写进回放缓冲给浏览器看，不喂 PTY */
 export function spawnTerm({ tool, cwd, command, label, replay, nodeId, cols, rows }) {

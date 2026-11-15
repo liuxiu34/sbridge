@@ -550,7 +550,14 @@ async function handleApi(req, res, url) {
 
   /* ---------- 内嵌终端 ---------- */
   if (req.method === 'GET' && resource === 'terms') {
-    return json(res, 200, { terms: termmod.listTerms() });
+    /* ?tail=<termId> 附带该终端最近输出的纯文本：新开会话时终端在服务端后台跑，
+       用户看不到向导/首屏，前端靠这个把状态回显到弹窗里（否则只能干等落盘）。 */
+    const tailId = url.searchParams.get('tail');
+    const payload = { terms: termmod.listTerms() };
+    if (tailId) {
+      if (termmod.getTerm(tailId)) payload.tail = termmod.termTail(tailId);
+    }
+    return json(res, 200, payload);
   }
   if (req.method === 'POST' && resource === 'terms' && id === 'kill') {
     const body = await readBody(req);
