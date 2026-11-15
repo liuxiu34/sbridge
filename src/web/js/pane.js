@@ -386,6 +386,8 @@ function createSessionPane(host, node, { active = true, caption, taskId: paneTas
   const renderForkAlert = () => {
     try {
       if (!forkAlertEl) return;
+      // 设置里可整体关掉（默认开）：关掉后两种提醒都不出现，不影响会话本身
+      if (userSettings.forkAlert === false) { forkAlertEl.hidden = true; return; }
       if (!ownerTask()) { forkAlertEl.hidden = true; return; }
       // 跨会话比「谁更新」仍只看实质代码活动（闲聊不参与）；
       // 链上后代取三个时间戳里最新的那个：fork/接力生成的新会话会把父会话的历史一起带过来，

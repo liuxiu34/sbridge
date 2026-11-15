@@ -196,8 +196,22 @@ function fixture(url, method, body) {
   assert.equal(await ev(`document.getElementById('set-syncmodel').checked`),false);
   await click('#modal-submit');await click('#btn-settings');
   assert.equal(await ev(`document.getElementById('set-syncmodel').checked`),false);
-  await escape();assert.equal(await ev(`document.getElementById('modal').hidden`),true);
-  assert.equal(await ev(`document.activeElement.id`),'btn-settings');checks.push('设置保存、整行开关、Esc与焦点恢复');
+  // 会话进度提醒开关：默认开，关掉后保存并在下次打开时保持关闭
+  assert.equal(await ev(`document.getElementById('set-forkalert').checked`),true,'会话进度提醒默认开启');
+  await click('label:has(#set-forkalert)');
+  assert.equal(await ev(`document.getElementById('set-forkalert').checked`),false);
+  await click('#modal-submit');
+  assert.equal(await ev(`userSettings.forkAlert`),false,'关闭后设置已写入');
+  assert.ok(await ev(`[...document.querySelectorAll('[data-role="forkalert"]')].every(el=>el.hidden)`),'关闭后提示条必须隐藏');
+  await click('#btn-settings');
+  assert.equal(await ev(`document.getElementById('set-forkalert').checked`),false,'重新打开设置应保持关闭');
+  await click('label:has(#set-forkalert)');
+  await click('#modal-submit');
+  assert.equal(await ev(`userSettings.forkAlert`),true,'可以再打开');
+  await click('#btn-settings');
+  await escape();
+  assert.equal(await ev(`document.getElementById('modal').hidden`),true);
+  assert.equal(await ev(`document.activeElement.id`),'btn-settings');checks.push('设置保存、整行开关、会话进度提醒开关、Esc与焦点恢复');
   await click('[data-pact="handoff"]');await click('[data-to="claude"]');
   assert.equal(await ev(`document.querySelector('[data-to="claude"]').getAttribute('aria-pressed')`),'true');await shot('handoff');await escape();
   await click('#btn-launch');await until(`document.getElementById('ns-cwd')`);await shot('new-session');await escape();checks.push('接力选择与新会话入口');

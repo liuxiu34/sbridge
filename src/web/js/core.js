@@ -15,7 +15,7 @@ const $ = (id) => document.getElementById(id);
 
 /* ---------- 用户设置：localStorage 持久化 ---------- */
 const SETTINGS_KEY = 'sbridge-settings';
-const DEFAULT_SETTINGS = { autoStartTerm: true, syncModel: true }; // 打开会话自动启动终端；工作轨迹与终端同步模型
+const DEFAULT_SETTINGS = { autoStartTerm: true, syncModel: true, forkAlert: true }; // 自动启动终端；同步模型；会话进度提醒
 let userSettings = loadUserSettings();
 function loadUserSettings() {
   try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
@@ -38,6 +38,12 @@ function openSettingsModal() {
         <span class="set-text"><span class="pick-title">工作轨迹与终端同步模型</span>
         <span class="pick-sub">在工作轨迹切换模型时同步写入终端；终端里用 /model 改过也会自动回填。关闭后两边各改各的，互不影响</span></span>
         <span class="switch"><input type="checkbox" id="set-syncmodel" ${userSettings.syncModel !== false ? 'checked' : ''}/><i></i></span>
+      </label>
+      <label class="set-row">
+        <span class="set-text"><span class="pick-title">会话进度提醒</span>
+        <span class="pick-sub">当其他会话或磁盘上有比本会话更新的改动时，在会话顶部提示，并可一键跳到最新会话。
+        觉得多余可以关掉，这里只是提醒，不影响你的使用。</span></span>
+        <span class="switch"><input type="checkbox" id="set-forkalert" ${userSettings.forkAlert !== false ? 'checked' : ''}/><i></i></span>
       </label>
       <div class="set-row">
         <span class="set-text"><span class="pick-title">编程工具安装与更新</span>
@@ -64,7 +70,12 @@ function openSettingsModal() {
       saveUserSettings({
         autoStartTerm: $('set-autoterm').checked,
         syncModel: $('set-syncmodel').checked,
+        forkAlert: $('set-forkalert').checked,
       });
+      // 立刻生效：已打开的面板重新算一次提示条
+      if (typeof paneHandles !== 'undefined') {
+        for (const h of paneHandles.values()) { try { h.refreshForkAlert?.(); } catch { /* ignore */ } }
+      }
       toast('设置已保存');
     },
   });
