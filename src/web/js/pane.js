@@ -1258,6 +1258,8 @@ function createSessionPane(host, node, { active = true, caption, taskId: paneTas
     getStatus() { return executionSnapshot?.status || null; },
     // 任务数据刷新后（新建了分支/接入了新会话）立刻重算「跳转到最新会话」提示条
     refreshForkAlert: renderForkAlert,
+    // 新开会话时直接切到终端视图：CLI 停在向导/报错时用户要能立刻操作它
+    showTerminal() { setStreamView(false); },
     node,
   };
 }

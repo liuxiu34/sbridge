@@ -79,10 +79,7 @@ function newSessionFlow(defaultCwd = '') {
         <input type="checkbox" id="ns-worktree" checked /> 在 git worktree 里隔离（干净仓库才生效，否则直接用上面的目录）
       </label>
       <div class="hint" id="ns-status" style="color:#9a9aa4;margin-top:10px">会启动一个内嵌终端的新会话；等它写出会话文件后自动接入本任务（通常几秒，首次启动要过向导的工具会久一些）。</div>
-      <div id="ns-term-preview" hidden style="margin-top:10px">
-        <div class="hint" style="color:#9a9aa4;margin-bottom:4px">终端正在显示（只读预览）：</div>
-        <pre id="ns-term-tail" style="max-height:150px;overflow:auto;margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#101312;color:#b9c9c0;font:11px var(--mono);white-space:pre-wrap;word-break:break-all"></pre>
-      </div>`,
+      <div class="hint" style="margin-top:8px;color:#9a9aa4">点「启动」后会直接打开该会话的终端，可以立刻在里面操作（过向导、看报错）；会话文件落盘后自动补全到看板。</div>`,
     submitLabel: '启动',
     onSubmit: async () => {
       const cwd = $('ns-cwd').value.trim();
@@ -94,81 +91,83 @@ function newSessionFlow(defaultCwd = '') {
         body: { tool, cwd, worktree: useWt, embed: true },
       });
       if (!r.ok) throw new Error(r.error || '启动失败');
-      // 终端在服务端后台跑：把它的输出回显到弹窗里，用户能看到是否卡在向导/首屏
       const launchedTermId = r.termId || null;
-      const previewEl = $('ns-term-preview');
-      const tailEl = $('ns-term-tail');
-      if (launchedTermId && previewEl) previewEl.hidden = false;
-      const stripAnsi = (t) => {
-        // 去掉 CSI / OSC 控制序列与回车，只留可读文本（终端预览用）
-        const ESC = String.fromCharCode(27);
-        const BEL = String.fromCharCode(7);
-        const csi = new RegExp(ESC + '\\[[0-9;?]*[a-zA-Z]', 'g');
-        const osc = new RegExp(ESC + '\\][^' + BEL + ESC + ']*(?:' + BEL + '|' + ESC + '\\\\)', 'g');
-        return String(t || '').replace(csi, '').replace(osc, '').replace(/\r/g, '');
-      };
-      const refreshTail = async () => {
-        if (!launchedTermId || !tailEl) return;
-        try {
-          const d = await api(`/api/terms?tail=${encodeURIComponent(launchedTermId)}`);
-          const text = stripAnsi(d.tail || '').trim();
-          if (text) {
-            tailEl.textContent = text.slice(-1200);
-            tailEl.scrollTop = tailEl.scrollHeight;
-          }
-        } catch { /* 忽略 */ }
-      };
-      // 轮询找这个目录下该工具的新会话文件（最多 90s；claude 要等第一条消息落盘）
-      const startedAt = Date.now();
-      const setStatus = (text) => {
-        const el = $('ns-status');
-        if (el) el.textContent = text;
-      };
+      const launchedNodeId = r.nodeId || null;
+
+      /* 终端已经绑到一个「启动中」节点上：直接打开那个面板并切到终端视图。
+         用户能在真终端里操作（过向导、看报错、打字），不是看只读预览。
+         会话文件落盘后，后台轮询把节点补成真实会话；进程提前退出则弹真实错误。 */
       const knownFiles = new Set();
       try { (await api(`/api/available?tool=${tool}&all=1`)).items?.forEach((s) => knownFiles.add(s.file)); } catch { /* 空=首会话也能识别 */ }
-      const deadline = startedAt + 90_000;
-      let attached = false;
-      let waited = 0;
-      setTimeout(() => { void refreshTail(); }, 1200);
-      while (Date.now() < deadline && !attached) {
-        // 明确告诉用户「在等什么、等了多久、还能等多久、现在该做什么」
-        waited = Math.round((Date.now() - startedAt) / 1000);
-        setStatus(`已启动，正在等它写出会话文件… 已等 ${waited}s / 最多 90s。` +
-          (waited >= 6 ? ' 如果终端里还停在欢迎页或向导，先在终端按提示走完（或直接说一句话），落盘后会自动接入。' : ''));
-        await new Promise((res) => setTimeout(res, 2000));
-        void refreshTail();
-        let items = [];
-        try { items = (await api(`/api/available?tool=${tool}&all=1`)).items || []; } catch { continue; }
-        const fresh = items
-          .filter((s) => !knownFiles.has(s.file) && (sameDir(s.cwd, cwd) || sameDir(s.cwd, r.cwd || '')))
-          .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0];
-        if (!fresh) continue;
-        let ar = await api(`/api/tasks/${currentTask.id}/nodes`, { method: 'POST', body: { tool, sessionId: fresh.id, file: fresh.file, allowCreateProject: true } });
-        // 自动捕获可能抢先把新会话挂进了「自动获取 · 目录名」任务：返回 exists + 那边的 taskId/nodeId
-        if (ar.kind === 'exists' && ar.taskId) {
-          await loadState();
-          if (ar.taskId !== currentTask?.id) await openTask(ar.taskId);
-          if (ar.nodeId) openSessionTab(ar.nodeId);
-          toast(`新会话已由自动获取接入「${ar.taskTitle}」，已打开`);
-          return;
-        }
-        if (ar.needsProject) continue; // 建不了项目文件夹就下轮再试（allowCreateProject 已带上）
-        if (!ar.ok) continue;
-        attached = true;
-        const nodeId = ar.node?.id || ar.nodeId;
+
+      if (launchedNodeId) {
+        close();
         await loadState();
-        await refreshTask();
-        if (nodeId) openSessionTab(nodeId);
-        if (r.worktree?.created) toast(`已在 worktree 里开新会话：${r.worktree.branch}`);
-        else if (r.worktree?.reason) toast(`仓库不干净，直接用 ${cwd}`);
-        else toast('新会话已接入本任务');
+        openSessionTab(launchedNodeId);
+        setTimeout(() => { try { paneHandles.get(launchedNodeId)?.showTerminal?.(); } catch { /* ignore */ } }, 400);
+        toast(`${toolLabel(tool)} 已启动：终端可直接操作，会话落盘后自动补全`);
+      } else {
+        close();
+        toast(`${toolLabel(tool)} 已启动`);
       }
-      if (!attached) {
-        const extra = tool === 'omp'
-          ? 'omp 首次启动可能要过向导；请先在终端里完成向导并说一句话，再点「接入已有会话」选它。'
-          : '请先在终端里说一句话（比如「你好」），再点「接入已有会话」选它。';
-        throw new Error(`等了 ${waited} 秒仍未检测到会话文件（${tool}）。${extra}`);
-      }
+
+      // 后台继续盯着：落盘就补全节点，进程挂了就把真实错误弹出来
+      (async () => {
+        const startedAt = Date.now();
+        const deadline = startedAt + 90_000;
+        let attached = false;
+        let lastTail = '';
+        let termGone = null;
+        const stripAnsi = (t) => {
+          const ESC = String.fromCharCode(27);
+          const BEL = String.fromCharCode(7);
+          const csi = new RegExp(ESC + '\\[[0-9;?]*[a-zA-Z]', 'g');
+          const osc = new RegExp(ESC + '\\][^' + BEL + ESC + ']*(?:' + BEL + '|' + ESC + '\\\\)', 'g');
+          return String(t || '').replace(csi, '').replace(osc, '').replace(/\r/g, '');
+        };
+        while (Date.now() < deadline && !attached) {
+          // 进程是否已经退出（配置/登录/依赖问题会立刻退出，此时再等就是白等）
+          if (launchedTermId) {
+            try {
+              const d = await api(`/api/terms?tail=${encodeURIComponent(launchedTermId)}`);
+              if (d.tail) lastTail = stripAnsi(d.tail).trim();
+              const t = (d.terms || []).find((x) => x.id === launchedTermId);
+              if (t && !t.running) termGone = { exitCode: t.exitCode };
+            } catch { /* 接口抖动，下轮再试 */ }
+          }
+          if (termGone) break;
+          await new Promise((res) => setTimeout(res, 2500));
+          let items = [];
+          try { items = (await api(`/api/available?tool=${tool}&all=1`)).items || []; } catch { continue; }
+          const fresh = items
+            .filter((s) => !knownFiles.has(s.file) && (sameDir(s.cwd, cwd) || sameDir(s.cwd, r.cwd || '')))
+            .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0];
+          if (!fresh) continue;
+          let ar = await api(`/api/tasks/${currentTask.id}/nodes`, { method: 'POST', body: { tool, sessionId: fresh.id, file: fresh.file, allowCreateProject: true } });
+          // 自动捕获可能抢先把新会话挂进了「自动获取 · 目录名」任务
+          if (ar.kind === 'exists' && ar.taskId) {
+            await loadState();
+            if (ar.taskId !== currentTask?.id) await openTask(ar.taskId);
+            if (ar.nodeId) openSessionTab(ar.nodeId);
+            toast(`新会话已由自动获取接入「${ar.taskTitle}」，已打开`);
+            return;
+          }
+          if (ar.needsProject) continue;
+          if (!ar.ok) continue;
+          attached = true;
+          await loadState();
+          await refreshTask();
+          const nodeId = ar.node?.id || ar.nodeId || launchedNodeId;
+          if (nodeId) openSessionTab(nodeId);
+          if (r.worktree?.created) toast(`已在 worktree 里开新会话：${r.worktree.branch}`);
+          else toast('新会话已接入本任务');
+        }
+        if (termGone) {
+          const detail = lastTail ? `\n\n终端最后输出：\n${lastTail.slice(-500)}` : '';
+          toast(`${tool} 启动失败（退出码 ${termGone.exitCode ?? '未知'}）：请检查该工具能否独立启动${detail ? '，详见终端' : ''}`);
+          if (launchedNodeId) { try { paneHandles.get(launchedNodeId)?.showTerminal?.(); } catch { /* ignore */ } }
+        }
+      })().catch(() => { /* 后台任务不打扰用户 */ });
     },
   });
   // 目录选择：桌面版走系统目录框（preload pickDir），浏览器降级走 Chromium File System API；都没有就手输

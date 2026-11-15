@@ -301,7 +301,8 @@ function taskDetail(db, taskId) {
       // 上下文用量改为打开面板时按需查询（GET .../nodes/:id/usage）：
       // 打开大任务时不再为几十个会话逐个读文件尾巴，首屏更快
       // sqlite: 前缀 = 正文在 Codex 本地库，视为存在
-      exists: n.file.startsWith('sqlite:') || fs.existsSync(n.file),
+      // file 为 null = 还没落盘（例如新开会话的「启动中」节点）
+      exists: !!n.file && (n.file.startsWith('sqlite:') || fs.existsSync(n.file)),
     };
   });
 
@@ -1042,8 +1043,32 @@ if (req.method === 'GET' && resource === 'stream') {
       }
       // 内嵌模式：agent 跑在 sbridge 窗口里的终端，不另开 PowerShell 窗口
       if (body.embed) {
-        const term = termmod.spawnTerm({ tool: body.tool, cwd: runCwd, command: LAUNCH_COMMANDS[body.tool], label: `${TOOL_LABELS[body.tool]} · 新会话` });
-        return json(res, 200, { ok: true, cwd: runCwd, worktree, since: new Date().toISOString(), termId: term.id });
+        /* 先建一个「启动中」的节点再把终端绑上去：
+           否则终端在服务端后台跑，用户看不到也点不到——工具停在向导/报错时完全没法处理。
+           节点先以 pending 标记存在，会话文件落盘后由 /nodes 的接入流程补齐真实 sessionId/file。 */
+        const task = db.tasks.find((t) => t.id === id);
+        let pendingNode = null;
+        if (task) {
+          pendingNode = store.addNode(db, id, {
+            tool: body.tool,
+            sessionId: null,
+            file: null,
+            cwd: runCwd,
+            title: `${TOOL_LABELS[body.tool]} · 新会话（启动中）`,
+            createdAt: new Date().toISOString(),
+            summary: { messageCount: 0, turnCount: 0 },
+            pendingLaunch: true,
+          });
+        }
+        const term = termmod.spawnTerm({
+          tool: body.tool, cwd: runCwd, command: LAUNCH_COMMANDS[body.tool],
+          label: `${TOOL_LABELS[body.tool]} · 新会话`, nodeId: pendingNode?.id || null,
+        });
+        if (pendingNode) { pendingNode.termId = term.id; store.save(db); }
+        return json(res, 200, {
+          ok: true, cwd: runCwd, worktree, since: new Date().toISOString(),
+          termId: term.id, nodeId: pendingNode?.id || null,
+        });
       }
       // 在独立终端窗口启动交互式会话，工作目录即任务目录
       try {
@@ -1222,6 +1247,16 @@ if (req.method === 'GET' && resource === 'stream') {
 
       const task = db.tasks.find((t) => t.id === id);
       if (!task) return json(res, 404, { error: '任务不存在' });
+
+      /* 新开会话流程会先建一个 pendingLaunch 节点把终端挂上去（让用户能操作终端）。
+         会话文件落盘后走到这里：直接把这个占位节点补成真实节点，避免同一会话出现两条。 */
+      const pending = (task.nodes || []).find((n) => n.pendingLaunch && n.tool === tool.name && !n.sessionId);
+      if (pending && !body.file && !body.sessionId) {
+        Object.assign(pending, makeNode(tool.name, conv, { parentNodeId: body.parentNodeId || null }));
+        delete pending.pendingLaunch;
+        store.save(db);
+        return json(res, 200, { ok: true, kind: 'filled', taskId: id, node: pending, nodeId: pending.id });
+      }
 
       /* 同一会话只允许在看板里存在一份：
          已导入 → 告诉前端它在哪，不再重复建卡片；已归档 → 走恢复，回到它原来的任务 */
@@ -1774,7 +1809,7 @@ if (req.method === 'GET' && resource === 'stream') {
       const node = taskDetail(db, id)?.nodes.find((n) => n.id === subId);
       if (!node) return json(res, 404, { error: '卡片不存在' });
       const tool = TOOLS[node.tool];
-      const missing = !tool || (!node.file.startsWith('sqlite:') && !fs.existsSync(node.file));
+      const missing = !tool || !node.file || (!node.file.startsWith('sqlite:') && !fs.existsSync(node.file));
       if (missing) return json(res, 200, { node, messages: [], missing: true });
       try {
         const conv = tool.read(node.file);
