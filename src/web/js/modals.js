@@ -887,10 +887,19 @@ function openApiConfigModal() {
         const other = tool === 'pi' ? 'omp' : 'pi';
         try {
           const r = await api(`/api/api-config?tool=${other}`);
-          providers = (r.providers || []).map((p) => ({ ...p, _open: false }));
+          let list = r.providers || [];
+          // omp 要求自定义 provider 必须有 apiKey（Pi 允许留空走环境变量/OAuth）。
+          // 复制到 omp 时跳过没 key 的，否则 omp 会直接拒绝启动整个 models.yml。
+          let skipped = [];
+          if (tool === 'omp') {
+            skipped = list.filter((p) => !String(p.apiKey || '').trim()).map((p) => p.name);
+            list = list.filter((p) => String(p.apiKey || '').trim());
+          }
+          providers = list.map((p) => ({ ...p, _open: false }));
           defaultModel = r.defaultModel || '';
           renderBody();
-          toast(`已载入 ${toolLabel(other)} 的配置，点保存才会写入 ${toolLabel(tool)}`);
+          const note = skipped.length ? `（跳过没有密钥的 ${skipped.join('、')}，omp 要求必须有 key）` : '';
+          toast(`已载入 ${toolLabel(other)} 的 ${list.length} 个 provider${note}，点保存才会写入 ${toolLabel(tool)}`);
         } catch (err) { toast(err.message); }
       });
     }
