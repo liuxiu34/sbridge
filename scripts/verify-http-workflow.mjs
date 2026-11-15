@@ -104,12 +104,12 @@ try {
   // 真实 PTY argv 探针同时覆盖引号、空格路径及 Codex 的带引号配置值。
   const probe = path.join(folder,'argv with spaces.cjs');
   fs.writeFileSync(probe,'console.log("TTY_SIZE="+process.stdout.columns+"x"+process.stdout.rows);console.log("SBRIDGE_ARGV="+JSON.stringify(process.argv.slice(2)));setInterval(()=>{},1000);');
-  const argvTerm = await api('/api/tasks/qa/term',{nodeId:'terminal',tool:'pi',cwd,cols:132,rows:37,resumeCommand:`node "${probe}" --provider "magpie" --model "auto/glm-5.3-flash" -c model_reasoning_effort="high"`});
+  const argvTerm = await api('/api/tasks/qa/term',{nodeId:'terminal',tool:'pi',cwd,cols:132,rows:37,resumeCommand:`node "${probe}" --provider "openai" --model "gpt-5" -c model_reasoning_effort="high"`});
   const argvOutput = await terminalOutput(argvTerm,/SBRIDGE_ARGV=/);
   const clean = argvOutput.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'');
   assert.equal(argvTerm.cols,132);assert.equal(argvTerm.rows,37);
   assert.match(clean,/TTY_SIZE=132x37/);
-  assert.deepEqual(JSON.parse(clean.match(/SBRIDGE_ARGV=(\[[^\r\n]*\])/)[1]),['--provider','magpie','--model','auto/glm-5.3-flash','-c','model_reasoning_effort=high']);
+  assert.deepEqual(JSON.parse(clean.match(/SBRIDGE_ARGV=(\[[^\r\n]*\])/)[1]),['--provider','openai','--model','gpt-5','-c','model_reasoning_effort=high']);
   await api('/api/terms/kill',{id:argvTerm.termId});
   for (const [nodeId,expected] of [['pi-terminal','workbuddy/qa'],['pi-legacy','workbuddy/qa'],['pi-override','qa']]) {
     const native = await api('/api/tasks/qa/term',{nodeId,tool:'pi',cwd});

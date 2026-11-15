@@ -136,7 +136,7 @@ function ensureProtocolFile(file, scope, { log = console.log, platform = process
     }
     const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
     if (current.includes(marker)) return false; // 已是当前版本
-    // 同一个文件被多个工具共用（InstaBox 上 ~/.codex/AGENTS.md 与 ~/.claude/CLAUDE.md 都软链到 ~/AGENTS.md）：
+    // 同一个文件被多个工具共用（~/.codex/AGENTS.md 与 ~/.claude/CLAUDE.md 可能都软链到 ~/AGENTS.md）：
     // 内容已经是当前版本、只是 scope 标签不同，就别再重写——否则每次启动两个 scope 互相覆盖标记。
     const anyScope = new RegExp(`<!-- sbridge:subagent-protocol-[\\w.-]+:v${PROTOCOL_VERSION} -->`);
     if (anyScope.test(current)) {
