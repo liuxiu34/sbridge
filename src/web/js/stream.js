@@ -388,7 +388,7 @@ function cotCountFromOutcome(outcome, isError) {
 }
 
 function cotSourceMeta(tool) {
-  const known = { codex: ['Codex', 'C'], pi: ['Pi', 'π'], claude: ['Claude Code', '✦'] };
+  const known = { codex: ['Codex', 'C'], pi: ['Pi', 'π'], claude: ['Claude Code', '✦'], omp: ['omp', 'O'] };
   const [label, initial] = known[tool] || [toolLabel(tool), String(toolLabel(tool) || '?').slice(0, 1)];
   return { key: known[tool] ? tool : 'other', label, initial };
 }

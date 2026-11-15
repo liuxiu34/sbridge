@@ -266,7 +266,7 @@ function renderPanes() {
   if (!openTabs.length && !area.querySelector('.workspace-empty')) {
     const taskEmpty = currentTask && !currentTask.nodes?.length;
     const extra = taskEmpty
-      ? `<button class="btn-primary" id="ws-empty-launch" style="margin-top:14px">▶ 发起第一场对话（Pi / Codex / Claude）</button>`
+      ? `<button class="btn-primary" id="ws-empty-launch" style="margin-top:14px">▶ 发起第一场对话（Pi / Claude / Codex / omp）</button>`
       : '';
     area.insertAdjacentHTML('beforeend', `<div class="workspace-empty" id="ws-empty"><div class="empty-icon">⌨</div><h2>${taskEmpty ? '这个任务还没有会话' : '选择或新建一个会话'}</h2><p>${taskEmpty ? '选一个工具、指定工作目录，开一场全新对话。' : '点侧栏「会话链」里的卡片，或顶栏「接入已有会话」。'}</p>${extra}</div>`);
     if (taskEmpty) {

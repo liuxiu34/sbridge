@@ -31,7 +31,7 @@ $('tree').addEventListener('click', (e) => {
 $('btn-settings').onclick = () => openSettingsModal();
 $('btn-discover').onclick = async () => {
   const btn = $('btn-discover');
-  if (!confirm('扫描 Codex / Pi / Claude Code 的全部会话，按项目目录归组导入看板？\n\n每个目录 = 一个项目文件夹，其下建一个「自动获取」任务收纳该目录所有工具的会话；已导入过的会话自动跳过。')) return;
+  if (!confirm('扫描 Codex / Pi / Claude Code / omp 的全部会话，按项目目录归组导入看板？\n\n每个目录 = 一个项目文件夹，其下建一个「自动获取」任务收纳该目录所有工具的会话；已导入过的会话自动跳过。')) return;
   btn.disabled = true;
   const orig = btn.textContent;
   btn.textContent = '扫描中…（可能要十几秒）';

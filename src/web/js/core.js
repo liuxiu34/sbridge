@@ -47,7 +47,7 @@ function openSettingsModal() {
       </label>
       <div class="set-row">
         <span class="set-text"><span class="pick-title">编程工具安装与更新</span>
-        <span class="pick-sub">Claude Code / Codex / Pi 是否安装、版本是否最新；缺的直接装，旧的直接更新（默认每 12 小时自动检查一次）</span></span>
+        <span class="pick-sub">Claude Code / Codex / Pi / omp 是否安装、版本是否最新；缺的直接装，旧的直接更新（默认每 12 小时自动检查一次）</span></span>
         <button type="button" class="btn-ghost" id="set-toolchain">${icon('download')} 管理</button>
       </div>
       <div class="set-row">
@@ -57,7 +57,7 @@ function openSettingsModal() {
       </div>
       <div class="set-row">
         <span class="set-text"><span class="pick-title">环境诊断</span>
-        <span class="pick-sub">检查 Codex / Pi / Claude Code 是否安装、会话目录与登录/密钥配置；只读检测，不改任何配置</span></span>
+        <span class="pick-sub">检查 Codex / Pi / Claude Code / omp 是否安装、会话目录与登录/密钥配置；只读检测，不改任何配置</span></span>
         <button type="button" class="btn-ghost" id="set-envcheck">${icon('radar')} 检查</button>
       </div>
       <div class="set-row">
@@ -112,7 +112,7 @@ function openSupportModal() {
     title: '支持 sbridge',
     submitLabel: '',
     bodyHtml: `
-      <p class="support-lead">sbridge 完全免费，所有功能都不加锁。持续维护、跟进 Codex / Pi / Claude 的更新和修 bug 都要花时间，欢迎赞助支持。</p>
+      <p class="support-lead">sbridge 完全免费，所有功能都不加锁。持续维护、跟进 Codex / Pi / Claude / omp 的更新和修 bug 都要花时间，欢迎赞助支持。</p>
       <div class="support-links">${rows.join('')}</div>
       ${SUPPORT_LINKS.note ? `<div class="support-note">${escapeHtml(SUPPORT_LINKS.note)}</div>` : ''}
       <p class="support-sub">赞助不影响任何功能；支持者的名字会记进项目的支持者名单。</p>`,
@@ -194,7 +194,8 @@ const clipText = (s, max) => {
   const t = String(s ?? '');
   return t.length <= max ? t : t.slice(0, max - 1) + '…';
 };
-const toolLabel = (t) => state.tools?.find((x) => x.id === t)?.label || (t === 'codex' ? 'Codex' : t === 'pi' ? 'Pi' : t);
+const TOOL_FALLBACK_LABEL = { codex: 'Codex', pi: 'Pi', claude: 'Claude Code', omp: 'omp' };
+const toolLabel = (t) => state.tools?.find((x) => x.id === t)?.label || TOOL_FALLBACK_LABEL[t] || t;
 const DEFAULT_TOOLS = [{ id: 'codex', label: 'Codex' }, { id: 'pi', label: 'Pi' }, { id: 'omp', label: 'OMP' }];
 const toolButtonsHtml = (activeId, exceptId = null) => (state.tools?.length ? state.tools : DEFAULT_TOOLS)
   .filter((t) => t.id !== exceptId)
