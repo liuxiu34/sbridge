@@ -149,7 +149,7 @@ function newSessionFlow(defaultCwd = '') {
             await loadState();
             if (ar.taskId !== currentTask?.id) await openTask(ar.taskId);
             if (ar.nodeId) openSessionTab(ar.nodeId);
-            toast(`新会话已由自动获取接入「${ar.taskTitle}」，已打开`);
+            toast(`新会话已接入「${ar.taskTitle}」，已打开`);
             return;
           }
           if (ar.needsProject) continue;

@@ -30,6 +30,11 @@ export function load() {
     for (const t of val.tasks) {
       const fixed = cleanTitle(t.title);
       if (fixed !== t.title) { t.title = fixed; dirty = true; }
+      // 老数据的自动归组任务带「自动获取 · 」前缀，看起来冗余：统一去掉（只改标题，不动归属）
+      if (typeof t.title === 'string' && t.title.startsWith('自动获取 · ')) {
+        const stripped = t.title.slice('自动获取 · '.length).trim();
+        if (stripped) { t.title = stripped; dirty = true; }
+      }
     }
     if (dirty) { try { fs.writeFileSync(DATA_FILE, JSON.stringify(val, null, 1), 'utf8'); } catch { /* 只读盘时忽略 */ } }
     cache = { key, db: val };

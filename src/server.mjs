@@ -794,7 +794,7 @@ if (req.method === 'GET' && resource === 'stream') {
         project = store.createProject(cur, display, g.cwd);
         projectsCreated++;
       }
-      const taskTitle = `自动获取 · ${name}`;
+      const taskTitle = name;
       let task = cur.tasks.find((t) => t.projectId === project.id && t.title === taskTitle);
       if (!task) { task = store.createTask(cur, { projectId: project.id, title: taskTitle }); tasksCreated++; }
       let added = 0;
@@ -1309,7 +1309,7 @@ if (req.method === 'GET' && resource === 'stream') {
           project = store.createProject(db, display, nodeCwd);
           createdProject = { id: project.id, name: project.name };
         }
-        const taskTitle = `自动获取 · ${name}`;
+        const taskTitle = name;
         target = db.tasks.find((t) => t.projectId === project.id && t.title === taskTitle)
           || store.createTask(db, { projectId: project.id, title: taskTitle });
       }

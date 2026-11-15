@@ -29,12 +29,18 @@ function renderTree() {
     } else loose.push(t);
   }
 
-  const taskHtml = (t) => `
+  /* 自动归组出来的任务名与项目目录同名（一个项目下就一个任务）：
+     这时再显示一遍目录名是纯重复，改成「全部会话」更符合它的实际含义。 */
+  const taskHtml = (t, projectName = '') => {
+    const same = projectName && String(t.title || '').trim() === String(projectName).trim();
+    const label = same ? '全部会话' : (t.title || '(未命名任务)');
+    return `
     <button type="button" class="task-item ${t.id === currentTaskId ? 'active' : ''}" data-task="${t.id}" ${t.id === currentTaskId ? 'aria-current="true"' : ''}>
       <span class="dot"></span>
-      <span class="t-title" title="${escapeHtml(t.title)}">${escapeHtml(t.title)}</span>
+      <span class="t-title" title="${escapeHtml(t.title)}">${escapeHtml(label)}</span>
       <span class="count" title="会话数">${t.nodeCount || 0}</span>
     </button>`;
+  };
 
   let html = `<div class="group-label">
     <span>项目文件夹</span>
@@ -56,7 +62,7 @@ function renderTree() {
         <button class="add" data-new-task-in="${p.id}" title="在此项目下新建任务">＋</button>
         <button class="project-del" data-del-project="${p.id}" title="删除项目文件夹（任务移到独立任务，不会删除本地会话文件）">${icon('x', 11)}</button>
       </div>
-      <div class="project-tasks"${collapsedProjects.has(p.id) ? ' hidden' : ''}>${list.map(taskHtml).join('')}</div>
+      <div class="project-tasks"${collapsedProjects.has(p.id) ? ' hidden' : ''}>${list.map((t) => taskHtml(t, p.name)).join('')}</div>
     </div>`;
   }
 
